@@ -153,7 +153,7 @@ class EventCfg:
 class RewardsCfg:
     left_end_effector_position_tracking = RewTerm(
         func=mdp.fingertip_midpoint_position_command_error,
-        weight=-0.2,
+        weight=-0.25,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS), "command_name": "left_ee_pose"},
     )
     right_end_effector_position_tracking = RewTerm(
@@ -163,53 +163,137 @@ class RewardsCfg:
     )
     left_end_effector_position_tracking_fine_grained = RewTerm(
         func=mdp.fingertip_midpoint_position_command_error_tanh,
-        weight=0.1,
+        weight=0.35,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS),
-            "std": 0.10,
+            "std": 0.06,
             "command_name": "left_ee_pose",
         },
     )
     right_end_effector_position_tracking_fine_grained = RewTerm(
         func=mdp.fingertip_midpoint_position_command_error_tanh,
-        weight=0.2,
+        weight=0.35,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=RIGHT_TCP_POSITION_LINKS),
-            "std": 0.10,
+            "std": 0.06,
             "command_name": "right_ee_pose",
+        },
+    )
+    left_end_effector_position_progress = RewTerm(
+        func=mdp.fingertip_midpoint_position_command_progress_reward,
+        weight=3.0,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS), "command_name": "left_ee_pose"},
+    )
+    right_end_effector_position_progress = RewTerm(
+        func=mdp.fingertip_midpoint_position_command_progress_reward,
+        weight=3.0,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=RIGHT_TCP_POSITION_LINKS), "command_name": "right_ee_pose"},
+    )
+    left_end_effector_goal_bonus = RewTerm(
+        func=mdp.fingertip_midpoint_position_command_success_bonus,
+        weight=0.3,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS),
+            "command_name": "left_ee_pose",
+            "threshold": 0.04,
+        },
+    )
+    right_end_effector_goal_bonus = RewTerm(
+        func=mdp.fingertip_midpoint_position_command_success_bonus,
+        weight=0.3,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=RIGHT_TCP_POSITION_LINKS),
+            "command_name": "right_ee_pose",
+            "threshold": 0.04,
+        },
+    )
+    left_end_effector_stable_goal_bonus = RewTerm(
+        func=mdp.fingertip_midpoint_stable_goal_bonus,
+        weight=0.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS),
+            "command_name": "left_ee_pose",
+            "threshold": 0.035,
+            "speed_threshold": 0.035,
+        },
+    )
+    right_end_effector_stable_goal_bonus = RewTerm(
+        func=mdp.fingertip_midpoint_stable_goal_bonus,
+        weight=0.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=RIGHT_TCP_POSITION_LINKS),
+            "command_name": "right_ee_pose",
+            "threshold": 0.035,
+            "speed_threshold": 0.035,
         },
     )
     left_end_effector_orientation_tracking = None
     right_end_effector_orientation_tracking = None
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1.0e-4)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-5.0e-5)
     left_joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-1.0e-4,
+        weight=-5.0e-5,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEFT_ARM_JOINTS)},
     )
     right_joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-1.0e-4,
+        weight=-5.0e-5,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=RIGHT_ARM_JOINTS)},
     )
     left_joint_vel_near_goal = RewTerm(
         func=mdp.joint_vel_l2_when_close_to_command,
-        weight=-2.0e-4,
+        weight=-1.0e-4,
         params={
             "command_name": "left_ee_pose",
             "asset_cfg": SceneEntityCfg("robot", joint_names=LEFT_ARM_JOINTS),
             "tcp_asset_cfg": SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS),
-            "threshold": 0.08,
+            "threshold": 0.06,
         },
     )
     right_joint_vel_near_goal = RewTerm(
         func=mdp.joint_vel_l2_when_close_to_command,
-        weight=-2.0e-4,
+        weight=-1.0e-4,
         params={
             "command_name": "right_ee_pose",
             "asset_cfg": SceneEntityCfg("robot", joint_names=RIGHT_ARM_JOINTS),
             "tcp_asset_cfg": SceneEntityCfg("robot", body_names=RIGHT_TCP_POSITION_LINKS),
-            "threshold": 0.08,
+            "threshold": 0.06,
+        },
+    )
+    left_tcp_speed_near_goal = RewTerm(
+        func=mdp.fingertip_midpoint_speed_l2_when_close_to_command,
+        weight=-2.0e-4,
+        params={
+            "command_name": "left_ee_pose",
+            "asset_cfg": SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS),
+            "threshold": 0.06,
+        },
+    )
+    right_tcp_speed_near_goal = RewTerm(
+        func=mdp.fingertip_midpoint_speed_l2_when_close_to_command,
+        weight=-2.0e-4,
+        params={
+            "command_name": "right_ee_pose",
+            "asset_cfg": SceneEntityCfg("robot", body_names=RIGHT_TCP_POSITION_LINKS),
+            "threshold": 0.06,
+        },
+    )
+    left_action_rate_near_goal = RewTerm(
+        func=mdp.action_rate_l2_when_close_to_command,
+        weight=-1.0e-4,
+        params={
+            "command_name": "left_ee_pose",
+            "asset_cfg": SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS),
+            "threshold": 0.05,
+        },
+    )
+    right_action_rate_near_goal = RewTerm(
+        func=mdp.action_rate_l2_when_close_to_command,
+        weight=-1.0e-4,
+        params={
+            "command_name": "right_ee_pose",
+            "asset_cfg": SceneEntityCfg("robot", body_names=RIGHT_TCP_POSITION_LINKS),
+            "threshold": 0.05,
         },
     )
 
@@ -223,23 +307,39 @@ class TerminationsCfg:
 class CurriculumCfg:
     action_rate = CurrTerm(
         func=mdp.modify_reward_weight,
-        params={"term_name": "action_rate", "weight": -0.005, "num_steps": 4500},
+        params={"term_name": "action_rate", "weight": -5.0e-4, "num_steps": 20000},
     )
     left_joint_vel = CurrTerm(
         func=mdp.modify_reward_weight,
-        params={"term_name": "left_joint_vel", "weight": -0.001, "num_steps": 4500},
+        params={"term_name": "left_joint_vel", "weight": -4.0e-4, "num_steps": 20000},
     )
     right_joint_vel = CurrTerm(
         func=mdp.modify_reward_weight,
-        params={"term_name": "right_joint_vel", "weight": -0.001, "num_steps": 4500},
+        params={"term_name": "right_joint_vel", "weight": -4.0e-4, "num_steps": 20000},
     )
     left_joint_vel_near_goal = CurrTerm(
         func=mdp.modify_reward_weight,
-        params={"term_name": "left_joint_vel_near_goal", "weight": -0.002, "num_steps": 6000},
+        params={"term_name": "left_joint_vel_near_goal", "weight": -0.0012, "num_steps": 25000},
     )
     right_joint_vel_near_goal = CurrTerm(
         func=mdp.modify_reward_weight,
-        params={"term_name": "right_joint_vel_near_goal", "weight": -0.002, "num_steps": 6000},
+        params={"term_name": "right_joint_vel_near_goal", "weight": -0.0012, "num_steps": 25000},
+    )
+    left_tcp_speed_near_goal = CurrTerm(
+        func=mdp.modify_reward_weight,
+        params={"term_name": "left_tcp_speed_near_goal", "weight": -0.0025, "num_steps": 25000},
+    )
+    right_tcp_speed_near_goal = CurrTerm(
+        func=mdp.modify_reward_weight,
+        params={"term_name": "right_tcp_speed_near_goal", "weight": -0.0025, "num_steps": 25000},
+    )
+    left_action_rate_near_goal = CurrTerm(
+        func=mdp.modify_reward_weight,
+        params={"term_name": "left_action_rate_near_goal", "weight": -0.0015, "num_steps": 25000},
+    )
+    right_action_rate_near_goal = CurrTerm(
+        func=mdp.modify_reward_weight,
+        params={"term_name": "right_action_rate_near_goal", "weight": -0.0015, "num_steps": 25000},
     )
 
 

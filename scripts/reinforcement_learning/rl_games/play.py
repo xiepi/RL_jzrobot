@@ -78,10 +78,42 @@ from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 
+def _resolve_play_task_name(task_name: str | None) -> str | None:
+    """Prefer the dedicated *-Play-vN task variant for playback when available."""
+
+    if task_name is None or "-Play-" in task_name:
+        return task_name
+
+    if "-v" not in task_name:
+        return task_name
+
+    stem, version = task_name.rsplit("-v", 1)
+    candidate = f"{stem}-Play-v{version}"
+    try:
+        gym.spec(candidate)
+    except Exception:
+        return task_name
+
+    print(f"[INFO] Switching playback task from '{task_name}' to dedicated play task '{candidate}'.")
+    return candidate
+
+
+args_cli.task = _resolve_play_task_name(args_cli.task)
+
+
+def _load_checkpoint_file(checkpoint_path: str) -> dict:
+    """Load a trusted local checkpoint across PyTorch versions."""
+
+    try:
+        return torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(checkpoint_path, map_location="cpu")
+
+
 def _infer_checkpoint_obs_dim(checkpoint_path: str) -> int | None:
     """Infer the policy observation dimension stored in an RL-Games checkpoint."""
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = _load_checkpoint_file(checkpoint_path)
     model_state = checkpoint.get("model", {})
 
     running_mean = model_state.get("running_mean_std.running_mean")
@@ -93,6 +125,47 @@ def _infer_checkpoint_obs_dim(checkpoint_path: str) -> int | None:
         return int(actor_weight.shape[1])
 
     return None
+
+
+def _infer_checkpoint_mlp_units(checkpoint_path: str) -> list[int] | None:
+    """Infer hidden-layer widths from an RL-Games actor MLP checkpoint."""
+
+    checkpoint = _load_checkpoint_file(checkpoint_path)
+    model_state = checkpoint.get("model", {})
+
+    units: list[int] = []
+    layer_index = 0
+    while True:
+        weight = model_state.get(f"a2c_network.actor_mlp.{layer_index}.weight")
+        if weight is None:
+            break
+        if len(weight.shape) != 2:
+            break
+        units.append(int(weight.shape[0]))
+        layer_index += 2
+
+    return units or None
+
+
+def _apply_network_compat_for_checkpoint(agent_cfg: dict, checkpoint_path: str) -> bool:
+    """Align the agent MLP layout with the checkpoint before building the policy."""
+
+    checkpoint_units = _infer_checkpoint_mlp_units(checkpoint_path)
+    if checkpoint_units is None:
+        return False
+
+    network_cfg = agent_cfg.get("params", {}).get("network", {})
+    mlp_cfg = network_cfg.get("mlp", {})
+    current_units = list(mlp_cfg.get("units", []))
+    if current_units == checkpoint_units:
+        return False
+
+    mlp_cfg["units"] = checkpoint_units
+    print(
+        "[INFO] Applying checkpoint network compatibility for playback: "
+        f"using hidden units {checkpoint_units} instead of configured {current_units}."
+    )
+    return True
 
 
 def _apply_obs_compat_for_checkpoint(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, obs_dim: int) -> bool:
@@ -192,6 +265,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     checkpoint_obs_dim = _infer_checkpoint_obs_dim(resume_path)
     if checkpoint_obs_dim is not None:
         _apply_obs_compat_for_checkpoint(env_cfg, checkpoint_obs_dim)
+    _apply_network_compat_for_checkpoint(agent_cfg, resume_path)
 
     rl_device = agent_cfg["params"]["config"]["device"]
     clip_obs = agent_cfg["params"]["env"].get("clip_observations", math.inf)

@@ -28,37 +28,39 @@ class JZReachEnvCfg(ReachEnvCfg):
                 joint_pos=JZ_BIMANUAL_HIGH_PD_CFG.init_state.joint_pos,
             ),
         )
-        self.scene.robot.spawn.articulation_props.solver_velocity_iteration_count = 2
-        self.scene.robot.actuators["arm"].stiffness = 400.0
-        self.scene.robot.actuators["arm"].damping = 90.0
+        self.scene.robot.spawn.articulation_props.solver_velocity_iteration_count = 1
+        self.scene.robot.actuators["arm"].stiffness = 260.0
+        self.scene.robot.actuators["arm"].damping = 42.0
 
-        self.actions.left_arm_action = mdp.JointPositionActionCfg(
+        self.actions.left_arm_action = mdp.EMAJointPositionToLimitsActionCfg(
             asset_name="robot",
             joint_names=LEFT_ARM_JOINTS,
-            scale={
-                "left_arm_joint1": 0.8,
-                "left_arm_joint2": 0.7,
-                "left_arm_joint3": 1.4,
-                "left_arm_joint4": 0.5,
-                "left_arm_joint5": 1.4,
-                "left_arm_joint6": 0.4,
-                "left_arm_joint7": 0.8,
+            scale=1.0,
+            alpha={
+                "left_arm_joint1": 0.45,
+                "left_arm_joint2": 0.45,
+                "left_arm_joint3": 0.50,
+                "left_arm_joint4": 0.35,
+                "left_arm_joint5": 0.35,
+                "left_arm_joint6": 0.25,
+                "left_arm_joint7": 0.25,
             },
-            use_default_offset=True,
+            rescale_to_limits=True,
         )
-        self.actions.right_arm_action = mdp.JointPositionActionCfg(
+        self.actions.right_arm_action = mdp.EMAJointPositionToLimitsActionCfg(
             asset_name="robot",
             joint_names=RIGHT_ARM_JOINTS,
-            scale={
-                "right_arm_joint1": 0.8,
-                "right_arm_joint2": 0.7,
-                "right_arm_joint3": 1.4,
-                "right_arm_joint4": 0.5,
-                "right_arm_joint5": 1.4,
-                "right_arm_joint6": 0.4,
-                "right_arm_joint7": 0.8,
+            scale=1.0,
+            alpha={
+                "right_arm_joint1": 0.45,
+                "right_arm_joint2": 0.45,
+                "right_arm_joint3": 0.50,
+                "right_arm_joint4": 0.35,
+                "right_arm_joint5": 0.35,
+                "right_arm_joint6": 0.25,
+                "right_arm_joint7": 0.25,
             },
-            use_default_offset=True,
+            rescale_to_limits=True,
         )
 
         self.commands.left_ee_pose.body_name = LEFT_TCP_ORIENTATION_LINK
@@ -78,3 +80,21 @@ class JZReachEnvCfg_PLAY(JZReachEnvCfg):
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
         self.observations.policy.enable_corruption = False
+        self.actions.left_arm_action.alpha = {
+            "left_arm_joint1": 0.30,
+            "left_arm_joint2": 0.30,
+            "left_arm_joint3": 0.34,
+            "left_arm_joint4": 0.22,
+            "left_arm_joint5": 0.22,
+            "left_arm_joint6": 0.14,
+            "left_arm_joint7": 0.14,
+        }
+        self.actions.right_arm_action.alpha = {
+            "right_arm_joint1": 0.30,
+            "right_arm_joint2": 0.30,
+            "right_arm_joint3": 0.34,
+            "right_arm_joint4": 0.22,
+            "right_arm_joint5": 0.22,
+            "right_arm_joint6": 0.14,
+            "right_arm_joint7": 0.14,
+        }

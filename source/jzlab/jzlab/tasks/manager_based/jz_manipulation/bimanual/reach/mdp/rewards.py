@@ -31,6 +31,27 @@ def _fingertip_midpoint_pos_w(asset: RigidObject, asset_cfg: SceneEntityCfg) -> 
     return asset.data.body_pos_w[:, asset_cfg.body_ids, :].mean(dim=1)  # type: ignore[index]
 
 
+def _fingertip_midpoint_lin_vel_w(asset: RigidObject, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    return asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :].mean(dim=1)  # type: ignore[index]
+
+
+def _reward_state_tensor(
+    env: ManagerBasedRLEnv,
+    name: str,
+    shape: tuple[int, ...],
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if not hasattr(env, "_jz_reward_state"):
+        env._jz_reward_state = {}
+
+    state = env._jz_reward_state
+    tensor = state.get(name)
+    if tensor is None or tuple(tensor.shape) != shape or tensor.dtype != dtype:
+        tensor = torch.zeros(shape, device=env.device, dtype=dtype)
+        state[name] = tensor
+    return tensor
+
+
 def fingertip_midpoint_position_b(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,
@@ -92,6 +113,90 @@ def fingertip_midpoint_position_command_error_tanh(
 
     distance = fingertip_midpoint_position_command_error(env, command_name, asset_cfg)
     return 1.0 - torch.tanh(distance / std)
+
+
+def fingertip_midpoint_position_command_progress_reward(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Positive reward for reducing TCP position error while a command stays unchanged."""
+
+    distance = fingertip_midpoint_position_command_error(env, command_name, asset_cfg)
+    command = env.command_manager.get_command(command_name)[:, :3]
+
+    prev_distance = _reward_state_tensor(
+        env, f"{command_name}_prev_distance", tuple(distance.shape), distance.dtype
+    )
+    prev_command = _reward_state_tensor(
+        env, f"{command_name}_prev_command", tuple(command.shape), command.dtype
+    )
+
+    is_reset = env.episode_length_buf == 0
+    command_changed = torch.norm(command - prev_command, dim=1) > 1.0e-6
+
+    reward = torch.clamp(prev_distance - distance, min=0.0)
+    reward = torch.where(is_reset | command_changed, torch.zeros_like(reward), reward)
+
+    prev_distance.copy_(distance)
+    prev_command.copy_(command)
+    return reward
+
+
+def fingertip_midpoint_position_command_success_bonus(
+    env: ManagerBasedRLEnv,
+    threshold: float,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Binary bonus when the synthetic TCP is inside the goal radius."""
+
+    distance = fingertip_midpoint_position_command_error(env, command_name, asset_cfg)
+    return (distance <= threshold).to(distance.dtype)
+
+
+def fingertip_midpoint_speed_l2_when_close_to_command(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    threshold: float,
+) -> torch.Tensor:
+    """TCP linear-speed penalty activated only when the gripper center is close to the target."""
+
+    asset: RigidObject = env.scene[asset_cfg.name]
+    distance = fingertip_midpoint_position_command_error(env, command_name, asset_cfg)
+    is_close = (distance <= threshold).to(asset.data.joint_vel.dtype)
+    tcp_speed_sq = torch.sum(torch.square(_fingertip_midpoint_lin_vel_w(asset, asset_cfg)), dim=1)
+    return is_close * tcp_speed_sq
+
+
+def action_rate_l2_when_close_to_command(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    threshold: float,
+) -> torch.Tensor:
+    """Action-rate penalty activated only near the goal to suppress target-point dithering."""
+
+    distance = fingertip_midpoint_position_command_error(env, command_name, asset_cfg)
+    is_close = (distance <= threshold).to(env.action_manager.action.dtype)
+    action_rate_sq = torch.sum(torch.square(env.action_manager.action - env.action_manager.prev_action), dim=1)
+    return is_close * action_rate_sq
+
+
+def fingertip_midpoint_stable_goal_bonus(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    threshold: float,
+    speed_threshold: float,
+) -> torch.Tensor:
+    """Bonus for being near the goal while keeping the TCP almost stationary."""
+
+    asset: RigidObject = env.scene[asset_cfg.name]
+    distance = fingertip_midpoint_position_command_error(env, command_name, asset_cfg)
+    tcp_speed = torch.norm(_fingertip_midpoint_lin_vel_w(asset, asset_cfg), dim=1)
+    return ((distance <= threshold) & (tcp_speed <= speed_threshold)).to(distance.dtype)
 
 
 def joint_vel_l2_when_close_to_command(
