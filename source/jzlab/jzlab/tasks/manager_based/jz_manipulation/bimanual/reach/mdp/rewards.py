@@ -199,6 +199,41 @@ def fingertip_midpoint_stable_goal_bonus(
     return ((distance <= threshold) & (tcp_speed <= speed_threshold)).to(distance.dtype)
 
 
+def fingertip_midpoint_stable_goal_dwell_reward(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    threshold: float,
+    speed_threshold: float,
+    hold_steps: int,
+) -> torch.Tensor:
+    """Reward consecutive stable steps near the goal to encourage settling instead of dithering."""
+
+    asset: RigidObject = env.scene[asset_cfg.name]
+    distance = fingertip_midpoint_position_command_error(env, command_name, asset_cfg)
+    command = env.command_manager.get_command(command_name)[:, :3]
+    tcp_speed = torch.norm(_fingertip_midpoint_lin_vel_w(asset, asset_cfg), dim=1)
+
+    prev_command = _reward_state_tensor(
+        env, f"{command_name}_stable_prev_command", tuple(command.shape), command.dtype
+    )
+    streak = _reward_state_tensor(
+        env, f"{command_name}_stable_streak", tuple(distance.shape), torch.int32
+    )
+
+    is_reset = env.episode_length_buf == 0
+    command_changed = torch.norm(command - prev_command, dim=1) > 1.0e-6
+    stable = (distance <= threshold) & (tcp_speed <= speed_threshold)
+
+    streak = torch.where(stable, streak + 1, torch.zeros_like(streak))
+    streak = torch.where(is_reset | command_changed, torch.zeros_like(streak), streak)
+    env._jz_reward_state[f"{command_name}_stable_streak"] = streak
+    prev_command.copy_(command)
+
+    dwell = torch.clamp(streak.to(distance.dtype) / float(hold_steps), max=1.0)
+    return dwell
+
+
 def joint_vel_l2_when_close_to_command(
     env: ManagerBasedRLEnv,
     command_name: str,

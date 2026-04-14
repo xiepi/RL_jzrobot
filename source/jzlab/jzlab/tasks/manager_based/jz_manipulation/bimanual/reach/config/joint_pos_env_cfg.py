@@ -15,6 +15,22 @@ from ....constants import LEFT_ARM_JOINTS, LEFT_TCP_ORIENTATION_LINK, RIGHT_ARM_
 _, _LEFT_COMMAND_QUAT, _RIGHT_COMMAND_QUAT = get_active_orientation_preset()
 
 
+def _relative_arm_action_scale(prefix: str) -> dict[str, float]:
+    return {
+        f"{prefix}_arm_joint1": 0.040,
+        f"{prefix}_arm_joint2": 0.040,
+        f"{prefix}_arm_joint3": 0.032,
+        f"{prefix}_arm_joint4": 0.028,
+        f"{prefix}_arm_joint5": 0.022,
+        f"{prefix}_arm_joint6": 0.018,
+        f"{prefix}_arm_joint7": 0.018,
+    }
+
+
+_LEFT_ARM_ACTION_SCALE = _relative_arm_action_scale("left")
+_RIGHT_ARM_ACTION_SCALE = _relative_arm_action_scale("right")
+
+
 @configclass
 class JZReachEnvCfg(ReachEnvCfg):
     """JZ dual-arm reach task with 14-DoF joint-position actions."""
@@ -29,38 +45,18 @@ class JZReachEnvCfg(ReachEnvCfg):
             ),
         )
         self.scene.robot.spawn.articulation_props.solver_velocity_iteration_count = 1
-        self.scene.robot.actuators["arm"].stiffness = 260.0
-        self.scene.robot.actuators["arm"].damping = 42.0
+        self.scene.robot.actuators["arm"].stiffness = 420.0
+        self.scene.robot.actuators["arm"].damping = 72.0
 
-        self.actions.left_arm_action = mdp.EMAJointPositionToLimitsActionCfg(
+        self.actions.left_arm_action = mdp.RelativeJointPositionActionCfg(
             asset_name="robot",
             joint_names=LEFT_ARM_JOINTS,
-            scale=1.0,
-            alpha={
-                "left_arm_joint1": 0.45,
-                "left_arm_joint2": 0.45,
-                "left_arm_joint3": 0.50,
-                "left_arm_joint4": 0.35,
-                "left_arm_joint5": 0.35,
-                "left_arm_joint6": 0.25,
-                "left_arm_joint7": 0.25,
-            },
-            rescale_to_limits=True,
+            scale=_LEFT_ARM_ACTION_SCALE,
         )
-        self.actions.right_arm_action = mdp.EMAJointPositionToLimitsActionCfg(
+        self.actions.right_arm_action = mdp.RelativeJointPositionActionCfg(
             asset_name="robot",
             joint_names=RIGHT_ARM_JOINTS,
-            scale=1.0,
-            alpha={
-                "right_arm_joint1": 0.45,
-                "right_arm_joint2": 0.45,
-                "right_arm_joint3": 0.50,
-                "right_arm_joint4": 0.35,
-                "right_arm_joint5": 0.35,
-                "right_arm_joint6": 0.25,
-                "right_arm_joint7": 0.25,
-            },
-            rescale_to_limits=True,
+            scale=_RIGHT_ARM_ACTION_SCALE,
         )
 
         self.commands.left_ee_pose.body_name = LEFT_TCP_ORIENTATION_LINK
@@ -80,21 +76,13 @@ class JZReachEnvCfg_PLAY(JZReachEnvCfg):
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
         self.observations.policy.enable_corruption = False
-        self.actions.left_arm_action.alpha = {
-            "left_arm_joint1": 0.30,
-            "left_arm_joint2": 0.30,
-            "left_arm_joint3": 0.34,
-            "left_arm_joint4": 0.22,
-            "left_arm_joint5": 0.22,
-            "left_arm_joint6": 0.14,
-            "left_arm_joint7": 0.14,
-        }
-        self.actions.right_arm_action.alpha = {
-            "right_arm_joint1": 0.30,
-            "right_arm_joint2": 0.30,
-            "right_arm_joint3": 0.34,
-            "right_arm_joint4": 0.22,
-            "right_arm_joint5": 0.22,
-            "right_arm_joint6": 0.14,
-            "right_arm_joint7": 0.14,
-        }
+        self.actions.left_arm_action = mdp.RelativeJointPositionActionCfg(
+            asset_name="robot",
+            joint_names=LEFT_ARM_JOINTS,
+            scale=_LEFT_ARM_ACTION_SCALE,
+        )
+        self.actions.right_arm_action = mdp.RelativeJointPositionActionCfg(
+            asset_name="robot",
+            joint_names=RIGHT_ARM_JOINTS,
+            scale=_RIGHT_ARM_ACTION_SCALE,
+        )

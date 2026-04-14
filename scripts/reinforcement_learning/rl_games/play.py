@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+import yaml
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_PACKAGE_DIR = PROJECT_ROOT / "source" / "jzlab"
 if str(SOURCE_PACKAGE_DIR) not in sys.path:
@@ -38,6 +40,12 @@ parser.add_argument("--use_pretrained_checkpoint", action="store_true", help="Us
 parser.add_argument(
     "--use_last_checkpoint", action="store_true", help="Use the last saved model if no checkpoint is provided."
 )
+parser.add_argument(
+    "--disable_play_task_switch",
+    action="store_true",
+    default=False,
+    help="Keep the requested task unchanged instead of auto-switching to the dedicated *-Play-vN variant.",
+)
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time if possible.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -67,6 +75,8 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
     multi_agent_to_single_agent,
 )
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
 from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
@@ -74,6 +84,13 @@ from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_che
 
 import isaaclab_tasks  # noqa: F401
 import jzlab.tasks  # noqa: F401
+from jzlab.tasks.manager_based.jz_manipulation.bimanual.reach import mdp
+from jzlab.tasks.manager_based.jz_manipulation.constants import (
+    LEFT_ARM_JOINTS,
+    LEFT_TCP_POSITION_LINKS,
+    RIGHT_ARM_JOINTS,
+    RIGHT_TCP_POSITION_LINKS,
+)
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
@@ -98,7 +115,8 @@ def _resolve_play_task_name(task_name: str | None) -> str | None:
     return candidate
 
 
-args_cli.task = _resolve_play_task_name(args_cli.task)
+if not args_cli.disable_play_task_switch:
+    args_cli.task = _resolve_play_task_name(args_cli.task)
 
 
 def _load_checkpoint_file(checkpoint_path: str) -> dict:
@@ -108,6 +126,32 @@ def _load_checkpoint_file(checkpoint_path: str) -> dict:
         return torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     except TypeError:
         return torch.load(checkpoint_path, map_location="cpu")
+
+
+def _load_checkpoint_env_params(checkpoint_path: str) -> dict | None:
+    """Load the saved env params that were written alongside the checkpoint, if present."""
+
+    checkpoint_file = Path(checkpoint_path).resolve()
+    run_dir = checkpoint_file.parent.parent
+    params_path = run_dir / "params" / "env.yaml"
+    if not params_path.is_file():
+        return None
+
+    with params_path.open("r", encoding="utf-8") as f:
+        return yaml.unsafe_load(f)
+
+
+def _load_checkpoint_agent_params(checkpoint_path: str) -> dict | None:
+    """Load the saved agent params that were written alongside the checkpoint, if present."""
+
+    checkpoint_file = Path(checkpoint_path).resolve()
+    run_dir = checkpoint_file.parent.parent
+    params_path = run_dir / "params" / "agent.yaml"
+    if not params_path.is_file():
+        return None
+
+    with params_path.open("r", encoding="utf-8") as f:
+        return yaml.unsafe_load(f)
 
 
 def _infer_checkpoint_obs_dim(checkpoint_path: str) -> int | None:
@@ -210,7 +254,234 @@ def _apply_obs_compat_for_checkpoint(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnv
             print("[INFO] Applying legacy 62-dim checkpoint compatibility for playback.")
         return changed
 
+    if obs_dim == 68:
+        changed = False
+        for term_name in ("left_pose_command", "right_pose_command"):
+            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
+                getattr(policy_cfg, term_name).func = jzlab.tasks.manager_based.jz_manipulation.bimanual.reach.mdp.generated_commands
+                changed = True
+        if getattr(policy_cfg, "left_tcp_pos", None) is None:
+            policy_cfg.left_tcp_pos = _make_tcp_position_obs_term(LEFT_TCP_POSITION_LINKS)
+            changed = True
+        if getattr(policy_cfg, "right_tcp_pos", None) is None:
+            policy_cfg.right_tcp_pos = _make_tcp_position_obs_term(RIGHT_TCP_POSITION_LINKS)
+            changed = True
+        if changed:
+            print("[INFO] Applying legacy 68-dim checkpoint compatibility for playback.")
+        return changed
+
     return False
+
+
+_OBS_GROUP_CFG_KEYS = (
+    "concatenate_terms",
+    "concatenate_dim",
+    "enable_corruption",
+    "history_length",
+    "flatten_history_dim",
+)
+
+
+def _make_tcp_position_obs_term(body_names: list[str]) -> ObsTerm:
+    return ObsTerm(func=mdp.fingertip_midpoint_position_b, params={"asset_cfg": SceneEntityCfg("robot", body_names=body_names)})
+
+
+def _make_tcp_error_obs_term(command_name: str, body_names: list[str]) -> ObsTerm:
+    return ObsTerm(
+        func=mdp.fingertip_midpoint_position_command_error_vector_b,
+        params={"command_name": command_name, "asset_cfg": SceneEntityCfg("robot", body_names=body_names)},
+    )
+
+
+def _build_policy_term(term_name: str, saved_term_cfg: dict, current_terms: dict[str, ObsTerm]) -> ObsTerm | None:
+    term_cfg = current_terms.get(term_name)
+
+    if term_name == "left_tcp_pos":
+        return _make_tcp_position_obs_term(LEFT_TCP_POSITION_LINKS)
+    if term_name == "right_tcp_pos":
+        return _make_tcp_position_obs_term(RIGHT_TCP_POSITION_LINKS)
+    if term_name == "left_tcp_error" and term_cfg is None:
+        return _make_tcp_error_obs_term("left_ee_pose", LEFT_TCP_POSITION_LINKS)
+    if term_name == "right_tcp_error" and term_cfg is None:
+        return _make_tcp_error_obs_term("right_ee_pose", RIGHT_TCP_POSITION_LINKS)
+    if term_name in ("left_pose_command", "right_pose_command"):
+        if term_cfg is None:
+            return None
+        func_name = str(saved_term_cfg.get("func", ""))
+        term_cfg.func = mdp.generated_commands if "generated_commands" in func_name else mdp.generated_command_positions
+        return term_cfg
+
+    return term_cfg
+
+
+def _build_action_cfg(saved_action_cfg: dict, joint_names: list[str]):
+    """Rebuild a joint action config from a saved env.yaml action block."""
+
+    class_type = str(saved_action_cfg.get("class_type", ""))
+    asset_name = saved_action_cfg.get("asset_name", "robot")
+    resolved_joint_names = saved_action_cfg.get("joint_names", joint_names)
+    scale = saved_action_cfg.get("scale", 1.0)
+    offset = saved_action_cfg.get("offset", 0.0)
+    preserve_order = bool(saved_action_cfg.get("preserve_order", False))
+
+    if "RelativeJointPositionAction" in class_type:
+        return mdp.RelativeJointPositionActionCfg(
+            asset_name=asset_name,
+            joint_names=resolved_joint_names,
+            scale=scale,
+            offset=offset,
+            preserve_order=preserve_order,
+            use_zero_offset=bool(saved_action_cfg.get("use_zero_offset", True)),
+        )
+    if "JointPositionAction" in class_type and "ToLimits" not in class_type:
+        return mdp.JointPositionActionCfg(
+            asset_name=asset_name,
+            joint_names=resolved_joint_names,
+            scale=scale,
+            offset=offset,
+            preserve_order=preserve_order,
+            use_default_offset=bool(saved_action_cfg.get("use_default_offset", True)),
+        )
+
+    common_kwargs = {
+        "asset_name": asset_name,
+        "joint_names": resolved_joint_names,
+        "scale": scale,
+        "rescale_to_limits": bool(saved_action_cfg.get("rescale_to_limits", True)),
+        "preserve_order": preserve_order,
+    }
+    if "EMAJointPositionToLimitsAction" in class_type:
+        return mdp.EMAJointPositionToLimitsActionCfg(alpha=saved_action_cfg.get("alpha", {}), **common_kwargs)
+    if "JointPositionToLimitsAction" in class_type:
+        return mdp.JointPositionToLimitsActionCfg(**common_kwargs)
+    return None
+
+
+def _apply_saved_agent_compat_for_checkpoint(agent_cfg: dict, checkpoint_path: str) -> bool:
+    """Restore saved RL-Games wrapper settings for older checkpoints."""
+
+    saved_agent_cfg = _load_checkpoint_agent_params(checkpoint_path)
+    if not saved_agent_cfg:
+        return False
+
+    changed = False
+    live_env_cfg = agent_cfg.setdefault("params", {}).setdefault("env", {})
+    saved_env_cfg = saved_agent_cfg.get("params", {}).get("env", {})
+    for key in ("clip_observations", "clip_actions"):
+        saved_value = saved_env_cfg.get(key)
+        if saved_value is None or live_env_cfg.get(key) == saved_value:
+            continue
+        live_env_cfg[key] = saved_value
+        changed = True
+
+    if changed:
+        print("[INFO] Applying saved RL-Games wrapper settings from checkpoint params.")
+    return changed
+
+
+def _apply_saved_env_compat_for_checkpoint(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, checkpoint_path: str
+) -> bool:
+    """Restore historical observation/action/control settings from the checkpoint's saved env params."""
+
+    saved_env_cfg = _load_checkpoint_env_params(checkpoint_path)
+    if not saved_env_cfg:
+        return False
+
+    changed = False
+
+    policy_cfg = getattr(getattr(env_cfg, "observations", None), "policy", None)
+    saved_policy_cfg = saved_env_cfg.get("observations", {}).get("policy", {})
+    if policy_cfg is not None and saved_policy_cfg:
+        config_items = {
+            key: policy_cfg.__dict__[key]
+            for key in _OBS_GROUP_CFG_KEYS
+            if key in policy_cfg.__dict__
+        }
+        config_items["enable_corruption"] = False
+        current_terms = {
+            key: value
+            for key, value in policy_cfg.__dict__.items()
+            if key not in _OBS_GROUP_CFG_KEYS and value is not None
+        }
+        ordered_terms: dict[str, ObsTerm] = {}
+        for term_name, saved_term_cfg in saved_policy_cfg.items():
+            if term_name in _OBS_GROUP_CFG_KEYS or saved_term_cfg is None:
+                continue
+            term_cfg = _build_policy_term(term_name, saved_term_cfg, current_terms)
+            if term_cfg is not None:
+                ordered_terms[term_name] = term_cfg
+        if ordered_terms:
+            policy_cfg.__dict__.clear()
+            policy_cfg.__dict__.update(config_items)
+            policy_cfg.__dict__.update(ordered_terms)
+            changed = True
+
+    commands_cfg = saved_env_cfg.get("commands", {})
+    for command_name in ("left_ee_pose", "right_ee_pose"):
+        saved_command_cfg = commands_cfg.get(command_name, {})
+        live_command_cfg = getattr(getattr(env_cfg, "commands", None), command_name, None)
+        if live_command_cfg is None:
+            continue
+        for attr_name in (
+            "dataset_key",
+            "body_name",
+            "debug_vis",
+            "use_fixed_quaternion",
+            "fixed_quaternion",
+            "resampling_time_range",
+            "current_position_body_names",
+            "current_quaternion_offset",
+        ):
+            if attr_name not in saved_command_cfg:
+                continue
+            saved_value = saved_command_cfg.get(attr_name)
+            if getattr(live_command_cfg, attr_name, None) != saved_value:
+                setattr(live_command_cfg, attr_name, saved_value)
+                changed = True
+
+    sim_cfg = saved_env_cfg.get("sim", {})
+    saved_physx_cfg = sim_cfg.get("physx", {})
+    if hasattr(env_cfg, "sim") and hasattr(env_cfg.sim, "physx"):
+        ext_forces = saved_physx_cfg.get("enable_external_forces_every_iteration")
+        if ext_forces is not None:
+            env_cfg.sim.physx.enable_external_forces_every_iteration = ext_forces
+            changed = True
+
+    robot_cfg = saved_env_cfg.get("scene", {}).get("robot", {})
+    live_robot_cfg = getattr(getattr(env_cfg, "scene", None), "robot", None)
+    if live_robot_cfg is not None:
+        solver_vel_iters = robot_cfg.get("spawn", {}).get("articulation_props", {}).get("solver_velocity_iteration_count")
+        if solver_vel_iters is not None and getattr(live_robot_cfg, "spawn", None) is not None:
+            articulation_props = getattr(live_robot_cfg.spawn, "articulation_props", None)
+            if articulation_props is not None:
+                articulation_props.solver_velocity_iteration_count = solver_vel_iters
+                changed = True
+
+        arm_damping = robot_cfg.get("actuators", {}).get("arm", {}).get("damping")
+        arm_stiffness = robot_cfg.get("actuators", {}).get("arm", {}).get("stiffness")
+        if arm_damping is not None and getattr(live_robot_cfg, "actuators", None) is not None:
+            arm_actuator = live_robot_cfg.actuators.get("arm")
+            if arm_actuator is not None:
+                arm_actuator.damping = arm_damping
+                changed = True
+                if arm_stiffness is not None:
+                    arm_actuator.stiffness = arm_stiffness
+                    changed = True
+
+    saved_actions_cfg = saved_env_cfg.get("actions", {})
+    left_action_cfg = _build_action_cfg(saved_actions_cfg.get("left_arm_action", {}), LEFT_ARM_JOINTS)
+    right_action_cfg = _build_action_cfg(saved_actions_cfg.get("right_arm_action", {}), RIGHT_ARM_JOINTS)
+    if left_action_cfg is not None:
+        env_cfg.actions.left_arm_action = left_action_cfg
+        changed = True
+    if right_action_cfg is not None:
+        env_cfg.actions.right_arm_action = right_action_cfg
+        changed = True
+
+    if changed:
+        print("[INFO] Applying playback compatibility from saved run params next to checkpoint.")
+    return changed
 
 
 def _infer_env_policy_obs_dim(env: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg | gym.Env) -> int | None:
@@ -262,8 +533,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = os.path.dirname(os.path.dirname(resume_path))
 
     env_cfg.log_dir = log_dir
+    _apply_saved_agent_compat_for_checkpoint(agent_cfg, resume_path)
     checkpoint_obs_dim = _infer_checkpoint_obs_dim(resume_path)
-    if checkpoint_obs_dim is not None:
+    applied_saved_env_compat = _apply_saved_env_compat_for_checkpoint(env_cfg, resume_path)
+    if checkpoint_obs_dim is not None and not applied_saved_env_compat:
         _apply_obs_compat_for_checkpoint(env_cfg, checkpoint_obs_dim)
     _apply_network_compat_for_checkpoint(agent_cfg, resume_path)
 
