@@ -49,6 +49,22 @@ def object_position_in_robot_root_frame(env: ManagerBasedEnv, robot_cfg=SceneEnt
     obj_pos_b, _ = subtract_frame_transforms(base_pos_w, base_quat_w, obj_pos_w)
     return obj_pos_b
 
+
+def fingertip_midpoint_to_object_vector_b(
+    env: ManagerBasedEnv,
+    tcp_asset_cfg: SceneEntityCfg,
+    robot_cfg=SceneEntityCfg("robot"),
+    object_cfg=SceneEntityCfg("object"),
+):
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+    base_pos_w, base_quat_w = _base_link_pose_w(robot)
+    tcp_pos_w = _fingertip_midpoint_pos_w(robot, tcp_asset_cfg)
+    obj_pos_w = obj.data.root_pos_w
+    tcp_pos_b, _ = subtract_frame_transforms(base_pos_w, base_quat_w, tcp_pos_w)
+    obj_pos_b, _ = subtract_frame_transforms(base_pos_w, base_quat_w, obj_pos_w)
+    return obj_pos_b - tcp_pos_b
+
 def tcp_to_object_distance(env: ManagerBasedRLEnv, tcp_asset_cfg: SceneEntityCfg, object_cfg=SceneEntityCfg("object")):
     robot: Articulation = env.scene[tcp_asset_cfg.name]
     tcp_pos_w = _fingertip_midpoint_pos_w(robot, tcp_asset_cfg)

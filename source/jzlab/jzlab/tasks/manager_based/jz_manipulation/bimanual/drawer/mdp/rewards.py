@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.assets import Articulation
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import matrix_from_quat
 
 from ....constants import LEFT_GRIPPER_JOINTS
@@ -43,6 +44,16 @@ def _drawer_joint_pos(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 def _left_handle_distance(env: ManagerBasedRLEnv) -> torch.Tensor:
     return torch.norm(_handle_pos_w(env) - _left_tcp_midpoint_pos_w(env), dim=1)
+
+
+def _tcp_midpoint_pos_w(env: ManagerBasedRLEnv, tcp_asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    robot: Articulation = env.scene[tcp_asset_cfg.name]
+    return robot.data.body_pos_w[:, tcp_asset_cfg.body_ids, :].mean(dim=1)
+
+
+def _tcp_midpoint_lin_vel_w(env: ManagerBasedRLEnv, tcp_asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    robot: Articulation = env.scene[tcp_asset_cfg.name]
+    return robot.data.body_lin_vel_w[:, tcp_asset_cfg.body_ids, :].mean(dim=1)
 
 
 def approach_handle(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
@@ -143,27 +154,22 @@ def table_penetration_penalty(
 
 
 def tcp_approach_speed_reward(env: ManagerBasedRLEnv, tcp_asset_cfg: SceneEntityCfg, object_cfg=SceneEntityCfg("object")):
-    from isaaclab.assets import Articulation, RigidObject
-    obj: RigidObject = env.scene["cabinet"]
-    robot: Articulation = env.scene["robot"]
-    tcp_pos_w = env.scene["left_ee_frame"].data.target_pos_w[..., :2, :].mean(dim=1)
-    cabinet_pos_w = obj.data.root_pos_w[:, :2]
-    to_obj = cabinet_pos_w - tcp_pos_w
+    tcp_pos_w = _tcp_midpoint_pos_w(env, tcp_asset_cfg)
+    handle_pos_w = _handle_pos_w(env)
+    to_obj = handle_pos_w - tcp_pos_w
     dist = torch.norm(to_obj, dim=1).clamp(min=1e-6)
     direction = to_obj / dist.unsqueeze(-1)
-    vel = robot.data.root_vel_w[:, :2]
+    vel = _tcp_midpoint_lin_vel_w(env, tcp_asset_cfg)
     approach_speed = torch.sum(vel * direction, dim=1)
     speed_reward = torch.exp(-torch.square((approach_speed - 0.05) / 0.03))
     active = (dist <= 0.25).to(speed_reward.dtype)
     return active * speed_reward
 
 def tcp_closing_speed_penalty(env: ManagerBasedRLEnv, tcp_asset_cfg: SceneEntityCfg, object_cfg=SceneEntityCfg("object")):
-    from isaaclab.assets import Articulation
-    robot: Articulation = env.scene["robot"]
-    tcp_pos_w = env.scene["left_ee_frame"].data.target_pos_w[..., :2, :].mean(dim=1)
-    cabinet_pos_w = env.scene["cabinet"].data.root_pos_w[:, :2]
-    dist = torch.norm(cabinet_pos_w - tcp_pos_w, dim=1)
-    speed = torch.norm(robot.data.root_vel_w[:, :3], dim=1)
+    tcp_pos_w = _tcp_midpoint_pos_w(env, tcp_asset_cfg)
+    handle_pos_w = _handle_pos_w(env)
+    dist = torch.norm(handle_pos_w - tcp_pos_w, dim=1)
+    speed = torch.norm(_tcp_midpoint_lin_vel_w(env, tcp_asset_cfg), dim=1)
     approach_mode = (dist <= 0.20).to(speed.dtype)
     return approach_mode * torch.square(speed)
 
@@ -187,3 +193,7 @@ def drawer_stable_pull_reward(env: ManagerBasedRLEnv):
     drawer_vel = torch.abs(cabinet.data.joint_vel[:, joint_id])
     steady = (drawer_vel > 0.001).to(drawer_vel.dtype)
     return steady * drawer_vel
+
+
+def action_max_abs(env: ManagerBasedRLEnv) -> torch.Tensor:
+    return torch.max(torch.abs(env.action_manager.action), dim=1).values

@@ -470,7 +470,6 @@ class RewardsCfg:
         weight=-7.5e-4,
         params={
             "distance_threshold": 0.07,
-            "effort_threshold": 0.75,
             "tcp_asset_cfg": SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS),
             "gripper_asset_cfg": SceneEntityCfg("robot", joint_names=LEFT_GRIPPER_JOINTS),
         },
@@ -485,7 +484,6 @@ class RewardsCfg:
         weight=-7.5e-4,
         params={
             "distance_threshold": 0.07,
-            "effort_threshold": 0.75,
             "tcp_asset_cfg": SceneEntityCfg("robot", body_names=RIGHT_TCP_POSITION_LINKS),
             "gripper_asset_cfg": SceneEntityCfg("robot", joint_names=RIGHT_GRIPPER_JOINTS),
         },
