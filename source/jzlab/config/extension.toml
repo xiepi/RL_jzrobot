@@ -3,10 +3,10 @@ version = "0.1.0"
 category = "isaaclab"
 readme = "README.md"
 title = "JZ Isaac Lab"
-author = "OpenAI Codex"
-maintainer = "OpenAI Codex"
+author = "xiepi"
+maintainer = "xiepi"
 description = "JZ Robot Isaac Lab reinforcement learning tasks"
-repository = "local://E:/jz_robot/jz_isaac_lab"
+repository = "https://github.com/xiepi/RL_jzrobot"
 keywords = ["extension", "isaaclab", "reinforcement-learning", "dual-arm"]
 
 [dependencies]

@@ -20,7 +20,7 @@ setup(
     description=EXTENSION_TOML_DATA["package"]["description"],
     keywords=EXTENSION_TOML_DATA["package"]["keywords"],
     install_requires=["psutil"],
-    license="Apache-2.0",
+    license="MIT",
     include_package_data=True,
     python_requires=">=3.10",
     classifiers=[
