@@ -20,7 +20,6 @@ if ISAACLAB_ROOT:
         if candidate.is_dir() and str(candidate) not in sys.path:
             sys.path.insert(0, str(candidate))
 
-
 from isaaclab.app import AppLauncher
 
 
@@ -36,7 +35,7 @@ parser.add_argument(
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment.")
 parser.add_argument("--distributed", action="store_true", default=False, help="Run training across multiple GPUs.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to a model checkpoint.")
-parser.add_argument("--sigma", type=str, default=None, help="The policy's initial standard deviation.")
+parser.add_argument("--sigma", type=str, default=None, help="The policy initial standard deviation.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL policy training iterations.")
 parser.add_argument("--wandb-project-name", type=str, default=None, help="Weights and Biases project name.")
 parser.add_argument("--wandb-entity", type=str, default=None, help="Weights and Biases entity.")
@@ -59,37 +58,34 @@ sys.argv = [sys.argv[0]] + hydra_args
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
-
-
-import gymnasium as gym
-import math
-import random
-from datetime import datetime
-
-import omni
-from rl_games.common import env_configurations, vecenv
-from rl_games.common.algo_observer import IsaacAlgoObserver
-from rl_games.torch_runner import Runner
-
-from isaaclab.envs import (
-    DirectMARLEnv,
-    DirectMARLEnvCfg,
-    DirectRLEnvCfg,
-    ManagerBasedRLEnvCfg,
-    multi_agent_to_single_agent,
-)
-from isaaclab.utils.assets import retrieve_file_path
-from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_yaml
-from isaaclab_rl.rl_games import MultiObserver, PbtAlgoObserver, RlGamesGpuEnv, RlGamesVecEnvWrapper
-
 import isaaclab_tasks  # noqa: F401
 import jzlab.tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 
+
 @hydra_task_config(args_cli.task, args_cli.agent)
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict) -> None:
+def main(env_cfg: "ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg", agent_cfg: dict) -> None:
+    import gymnasium as gym
+    import math
+    import random
+    from datetime import datetime
+    import omni
+    from rl_games.common import env_configurations, vecenv
+    from rl_games.common.algo_observer import IsaacAlgoObserver
+    from rl_games.torch_runner import Runner
+    from isaaclab.envs import (
+        DirectMARLEnv,
+        DirectMARLEnvCfg,
+        DirectRLEnvCfg,
+        ManagerBasedRLEnvCfg,
+        multi_agent_to_single_agent,
+    )
+    from isaaclab.utils.assets import retrieve_file_path
+    from isaaclab.utils.dict import print_dict
+    from isaaclab.utils.io import dump_yaml
+    from isaaclab_rl.rl_games import MultiObserver, PbtAlgoObserver, RlGamesGpuEnv, RlGamesVecEnvWrapper
+
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 

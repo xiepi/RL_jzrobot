@@ -15,7 +15,14 @@ from pathlib import Path
 from tensorboard.backend.event_processing import event_accumulator
 
 
-DEFAULT_LOG_ROOT = Path(r"E:\isaac-lab\IsaacLab\logs\rl_games\jz_bi_reach")
+def _resolve_default_log_root() -> Path:
+    isaaclab_path = os.environ.get("ISAACLAB_PATH")
+    if isaaclab_path:
+        return Path(isaaclab_path).expanduser().resolve() / "logs" / "rl_games" / "jz_bi_reach"
+    return Path.cwd() / "logs" / "rl_games" / "jz_bi_reach"
+
+
+DEFAULT_LOG_ROOT = _resolve_default_log_root()
 DEFAULT_TAGS = (
     "rewards/iter",
     "shaped_rewards/iter",
@@ -71,17 +78,19 @@ def _append(log_file: Path, text: str) -> None:
         f.write(text + "\n")
 
 
-def _latest_checkpoint(nn_dir: Path) -> tuple[Path | None, int | None]:
-    latest_path = None
-    latest_epoch = None
-    for path in sorted(nn_dir.glob("last_jz_bi_reach_ep_*.pth"), key=lambda p: p.stat().st_mtime, reverse=True):
+def _pending_eval_checkpoints(
+    nn_dir: Path, eval_start: int, eval_every: int, seen_eval_epochs: set[int]
+) -> list[tuple[Path, int]]:
+    pending: list[tuple[Path, int]] = []
+    for path in sorted(nn_dir.glob("last_jz_bi_reach_ep_*.pth"), key=lambda p: p.stat().st_mtime):
         match = CHECKPOINT_PATTERN.match(path.name)
         if not match:
             continue
-        latest_path = path
-        latest_epoch = int(match.group(1))
-        break
-    return latest_path, latest_epoch
+        epoch = int(match.group(1))
+        if epoch < eval_start or epoch % eval_every != 0 or epoch in seen_eval_epochs:
+            continue
+        pending.append((path, epoch))
+    return pending
 
 
 def _run_eval(
@@ -91,7 +100,8 @@ def _run_eval(
     num_envs: int,
     steps: int,
     output_log: Path,
-) -> None:
+    timeout_seconds: int,
+) -> bool:
     cmd = [
         sys.executable,
         str(eval_script),
@@ -105,25 +115,47 @@ def _run_eval(
         "--checkpoint",
         str(checkpoint_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, env=os.environ.copy(), check=False)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _append(output_log, f"[{timestamp}] EVAL {checkpoint_path.name}")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _append(output_log, f"[{timestamp}] EVAL_TIMEOUT {checkpoint_path.name} timeout_seconds={timeout_seconds}")
+        if exc.stdout:
+            _append(output_log, exc.stdout.rstrip())
+        if exc.stderr:
+            _append(output_log, exc.stderr.rstrip())
+        return False
+
     if result.stdout:
         _append(output_log, result.stdout.rstrip())
     if result.stderr:
         _append(output_log, result.stderr.rstrip())
+    if result.returncode != 0:
+        _append(output_log, f"[{timestamp}] EVAL_FAILED {checkpoint_path.name} returncode={result.returncode}")
+        return False
+    _append(output_log, f"[{timestamp}] EVAL_OK {checkpoint_path.name}")
+    return True
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Watch training progress and evaluate new checkpoints.")
     parser.add_argument("--run", required=True, help="Run directory name under the RL-Games log root.")
     parser.add_argument("--log-root", type=Path, default=DEFAULT_LOG_ROOT)
-    parser.add_argument("--task", type=str, default="Isaac-Reach-JZ-Bi-v0")
+    parser.add_argument("--task", type=str, default="Isaac-Reach-JZ-Bi-Play-v0")
     parser.add_argument("--poll-seconds", type=int, default=120)
-    parser.add_argument("--eval-every", type=int, default=200, help="Evaluate checkpoints every N epochs.")
-    parser.add_argument("--eval-start", type=int, default=200, help="First epoch eligible for evaluation.")
+    parser.add_argument("--eval-every", type=int, default=100, help="Evaluate checkpoints every N epochs.")
+    parser.add_argument("--eval-start", type=int, default=100, help="First epoch eligible for evaluation.")
     parser.add_argument("--eval-num-envs", type=int, default=8)
     parser.add_argument("--eval-steps", type=int, default=80)
+    parser.add_argument("--eval-timeout-seconds", type=int, default=900)
     args = parser.parse_args()
 
     run_dir = args.log_root / args.run
@@ -163,16 +195,20 @@ def main() -> None:
                 _append(status_log, f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {summary}")
                 last_event_mtime = event_mtime
 
-        checkpoint_path, checkpoint_epoch = _latest_checkpoint(run_dir / "nn")
-        if (
-            checkpoint_path is not None
-            and checkpoint_epoch is not None
-            and checkpoint_epoch >= args.eval_start
-            and checkpoint_epoch % args.eval_every == 0
-            and checkpoint_epoch not in seen_eval_epochs
+        for checkpoint_path, checkpoint_epoch in _pending_eval_checkpoints(
+            run_dir / "nn", args.eval_start, args.eval_every, seen_eval_epochs
         ):
-            _run_eval(eval_script, checkpoint_path, args.task, args.eval_num_envs, args.eval_steps, eval_log)
-            seen_eval_epochs.add(checkpoint_epoch)
+            succeeded = _run_eval(
+                eval_script,
+                checkpoint_path,
+                args.task,
+                args.eval_num_envs,
+                args.eval_steps,
+                eval_log,
+                args.eval_timeout_seconds,
+            )
+            if succeeded:
+                seen_eval_epochs.add(checkpoint_epoch)
 
         time.sleep(args.poll_seconds)
 

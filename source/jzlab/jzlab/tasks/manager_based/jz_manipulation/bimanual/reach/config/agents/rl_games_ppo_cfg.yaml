@@ -3,7 +3,7 @@ params:
 
   env:
     clip_observations: 100.0
-    clip_actions: 1.0
+    clip_actions: 100.0
 
   algo:
     name: a2c_continuous

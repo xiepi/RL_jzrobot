@@ -1,7 +1,7 @@
 {
   "frame_id": "base_link",
   "sampling_mode": "forward_kinematics_random_joint_sampling",
-  "source_urdf": "E:\\jz_robot\\jz_descripetion\\robot_urdf\\urdf\\robot_model_isaac_v2.urdf",
+  "source_urdf": "jz_descripetion/robot_urdf/urdf/robot_model_isaac_v2.urdf",
   "seed": 42,
   "voxel_size_m": 0.04,
   "joint_margin_threshold": 0.05,

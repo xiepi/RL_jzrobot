@@ -35,6 +35,12 @@ parser.add_argument("--checkpoint", type=str, required=True, help="Path to a mod
 parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment.")
 parser.add_argument("--steps", type=int, default=600, help="Number of evaluation steps to run.")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time if possible.")
+parser.add_argument(
+    "--stochastic",
+    action="store_true",
+    default=False,
+    help="Sample actions from the policy instead of using deterministic inference.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -61,7 +67,14 @@ from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 import isaaclab_tasks  # noqa: F401
 import jzlab.tasks  # noqa: F401
 from jzlab.tasks.manager_based.jz_manipulation.bimanual.reach import mdp
-from jzlab.tasks.manager_based.jz_manipulation.constants import LEFT_ARM_JOINTS, LEFT_TCP_POSITION_LINKS, RIGHT_ARM_JOINTS, RIGHT_TCP_POSITION_LINKS
+from jzlab.tasks.manager_based.jz_manipulation.constants import (
+    LEFT_ARM_JOINTS,
+    LEFT_TCP_ORIENTATION_LINK,
+    LEFT_TCP_POSITION_LINKS,
+    RIGHT_ARM_JOINTS,
+    RIGHT_TCP_ORIENTATION_LINK,
+    RIGHT_TCP_POSITION_LINKS,
+)
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 
@@ -125,11 +138,45 @@ def _make_tcp_position_obs_term(body_names: list[str]) -> ObsTerm:
     return ObsTerm(func=mdp.fingertip_midpoint_position_b, params={"asset_cfg": SceneEntityCfg("robot", body_names=body_names)})
 
 
+def _make_tcp_lin_vel_obs_term(body_names: list[str]) -> ObsTerm:
+    return ObsTerm(
+        func=mdp.fingertip_midpoint_linear_velocity_b,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=body_names)},
+    )
+
+
+def _make_projected_gravity_obs_term(body_name: str) -> ObsTerm:
+    return ObsTerm(
+        func=mdp.body_projected_gravity_b,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=[body_name])},
+    )
+
+
 def _make_tcp_error_obs_term(command_name: str, body_names: list[str]) -> ObsTerm:
     return ObsTerm(
         func=mdp.fingertip_midpoint_position_command_error_vector_b,
         params={"command_name": command_name, "asset_cfg": SceneEntityCfg("robot", body_names=body_names)},
     )
+
+
+_POLICY_TERM_NAMES = (
+    "left_joint_pos",
+    "right_joint_pos",
+    "left_joint_vel",
+    "right_joint_vel",
+    "left_tcp_pos",
+    "right_tcp_pos",
+    "left_pose_command",
+    "right_pose_command",
+    "left_tcp_error",
+    "right_tcp_error",
+    "left_tcp_lin_vel",
+    "right_tcp_lin_vel",
+    "left_wrist_gravity",
+    "right_wrist_gravity",
+    "left_actions",
+    "right_actions",
+)
 
 
 def _apply_obs_compat_for_checkpoint(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, obs_dim: int) -> bool:
@@ -145,10 +192,54 @@ def _apply_obs_compat_for_checkpoint(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnv
                 changed = True
 
     if obs_dim == 56:
-        for term_name in ("left_tcp_error", "right_tcp_error"):
+        for term_name in (
+            "left_tcp_error",
+            "right_tcp_error",
+            "left_tcp_pos",
+            "right_tcp_pos",
+            "left_tcp_lin_vel",
+            "right_tcp_lin_vel",
+            "left_wrist_gravity",
+            "right_wrist_gravity",
+        ):
             if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
                 setattr(policy_cfg, term_name, None)
                 changed = True
+
+    if obs_dim == 62:
+        for term_name in (
+            "left_tcp_pos",
+            "right_tcp_pos",
+            "left_tcp_lin_vel",
+            "right_tcp_lin_vel",
+            "left_wrist_gravity",
+            "right_wrist_gravity",
+        ):
+            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
+                setattr(policy_cfg, term_name, None)
+                changed = True
+
+    if obs_dim == 66:
+        for term_name in ("left_pose_command", "right_pose_command"):
+            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
+                getattr(policy_cfg, term_name).func = mdp.generated_command_positions
+                changed = True
+        for term_name in ("left_tcp_pos", "right_tcp_pos"):
+            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
+                setattr(policy_cfg, term_name, None)
+                changed = True
+        if getattr(policy_cfg, "left_tcp_lin_vel", None) is None:
+            policy_cfg.left_tcp_lin_vel = _make_tcp_lin_vel_obs_term(LEFT_TCP_POSITION_LINKS)
+            changed = True
+        if getattr(policy_cfg, "right_tcp_lin_vel", None) is None:
+            policy_cfg.right_tcp_lin_vel = _make_tcp_lin_vel_obs_term(RIGHT_TCP_POSITION_LINKS)
+            changed = True
+        if getattr(policy_cfg, "left_wrist_gravity", None) is None:
+            policy_cfg.left_wrist_gravity = _make_projected_gravity_obs_term(LEFT_TCP_ORIENTATION_LINK)
+            changed = True
+        if getattr(policy_cfg, "right_wrist_gravity", None) is None:
+            policy_cfg.right_wrist_gravity = _make_projected_gravity_obs_term(RIGHT_TCP_ORIENTATION_LINK)
+            changed = True
 
     if obs_dim == 68:
         if getattr(policy_cfg, "left_tcp_pos", None) is None:
@@ -157,6 +248,10 @@ def _apply_obs_compat_for_checkpoint(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnv
         if getattr(policy_cfg, "right_tcp_pos", None) is None:
             policy_cfg.right_tcp_pos = _make_tcp_position_obs_term(RIGHT_TCP_POSITION_LINKS)
             changed = True
+        for term_name in ("left_tcp_lin_vel", "right_tcp_lin_vel", "left_wrist_gravity", "right_wrist_gravity"):
+            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
+                setattr(policy_cfg, term_name, None)
+                changed = True
 
     return changed
 
@@ -202,6 +297,35 @@ def _build_action_cfg(saved_action_cfg: dict, joint_names: list[str]):
     return None
 
 
+def _build_policy_term(term_name: str, saved_term_cfg: dict, current_terms: dict[str, ObsTerm | None]) -> ObsTerm | None:
+    term_cfg = current_terms.get(term_name)
+
+    if term_name == "left_tcp_pos":
+        return _make_tcp_position_obs_term(LEFT_TCP_POSITION_LINKS)
+    if term_name == "right_tcp_pos":
+        return _make_tcp_position_obs_term(RIGHT_TCP_POSITION_LINKS)
+    if term_name == "left_tcp_lin_vel":
+        return _make_tcp_lin_vel_obs_term(LEFT_TCP_POSITION_LINKS)
+    if term_name == "right_tcp_lin_vel":
+        return _make_tcp_lin_vel_obs_term(RIGHT_TCP_POSITION_LINKS)
+    if term_name == "left_wrist_gravity":
+        return _make_projected_gravity_obs_term(LEFT_TCP_ORIENTATION_LINK)
+    if term_name == "right_wrist_gravity":
+        return _make_projected_gravity_obs_term(RIGHT_TCP_ORIENTATION_LINK)
+    if term_name == "left_tcp_error" and term_cfg is None:
+        return _make_tcp_error_obs_term("left_ee_pose", LEFT_TCP_POSITION_LINKS)
+    if term_name == "right_tcp_error" and term_cfg is None:
+        return _make_tcp_error_obs_term("right_ee_pose", RIGHT_TCP_POSITION_LINKS)
+    if term_name in ("left_pose_command", "right_pose_command"):
+        if term_cfg is None:
+            return None
+        func_name = str(saved_term_cfg.get("func", ""))
+        term_cfg.func = mdp.generated_commands if "generated_commands" in func_name else mdp.generated_command_positions
+        return term_cfg
+
+    return term_cfg
+
+
 def _apply_saved_agent_compat_for_checkpoint(agent_cfg: dict, checkpoint_path: str) -> bool:
     saved_agent_cfg = _load_checkpoint_yaml(checkpoint_path, "agent.yaml")
     if not saved_agent_cfg:
@@ -226,19 +350,31 @@ def _apply_saved_env_compat_for_checkpoint(
         return False
 
     changed = False
+    # Skip restoring the ground spawn if the saved config used a cloud-hosted USD
+    # (the network is not accessible so this would raise FileNotFoundError)
+    saved_ground_usd = (
+        saved_env_cfg.get("scene", {}).get("ground", {}).get("spawn", {}).get("usd_path", "")
+    )
+    if saved_ground_usd and (
+        saved_ground_usd.startswith("http://")
+        or saved_ground_usd.startswith("https://")
+        or saved_ground_usd.startswith("s3://")
+    ):
+        saved_env_cfg["scene"].pop("ground", None)
+
     policy_cfg = getattr(getattr(env_cfg, "observations", None), "policy", None)
     saved_policy_cfg = saved_env_cfg.get("observations", {}).get("policy", {})
     if policy_cfg is not None and saved_policy_cfg:
-        if "left_tcp_pos" in saved_policy_cfg and getattr(policy_cfg, "left_tcp_pos", None) is None:
-            policy_cfg.left_tcp_pos = _make_tcp_position_obs_term(LEFT_TCP_POSITION_LINKS)
-            changed = True
-        if "right_tcp_pos" in saved_policy_cfg and getattr(policy_cfg, "right_tcp_pos", None) is None:
-            policy_cfg.right_tcp_pos = _make_tcp_position_obs_term(RIGHT_TCP_POSITION_LINKS)
-            changed = True
-        for term_name in ("left_pose_command", "right_pose_command"):
-            func_name = str(saved_policy_cfg.get(term_name, {}).get("func", ""))
-            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
-                getattr(policy_cfg, term_name).func = mdp.generated_commands if "generated_commands" in func_name else mdp.generated_command_positions
+        current_terms = {term_name: getattr(policy_cfg, term_name, None) for term_name in _POLICY_TERM_NAMES}
+        for term_name in _POLICY_TERM_NAMES:
+            if hasattr(policy_cfg, term_name) or current_terms.get(term_name) is not None:
+                setattr(policy_cfg, term_name, None)
+        for term_name, saved_term_cfg in saved_policy_cfg.items():
+            if term_name not in _POLICY_TERM_NAMES or saved_term_cfg is None:
+                continue
+            term_cfg = _build_policy_term(term_name, saved_term_cfg, current_terms)
+            if term_cfg is not None:
+                setattr(policy_cfg, term_name, term_cfg)
                 changed = True
         policy_cfg.enable_corruption = False
 
@@ -305,28 +441,6 @@ def _infer_env_policy_obs_dim(env: ManagerBasedRLEnvCfg | DirectRLEnvCfg | Direc
     return None
 
 
-def _split_policy_obs(obs_tensor: torch.Tensor) -> dict[str, torch.Tensor]:
-    """Decode the current 54-dim policy observation layout."""
-
-    cursor = 0
-    parts = {}
-    for name, width in (
-        ("left_joint_pos", 7),
-        ("right_joint_pos", 7),
-        ("left_joint_vel", 7),
-        ("right_joint_vel", 7),
-        ("left_pose_command", 3),
-        ("right_pose_command", 3),
-        ("left_tcp_error", 3),
-        ("right_tcp_error", 3),
-        ("left_actions", 7),
-        ("right_actions", 7),
-    ):
-        parts[name] = obs_tensor[:, cursor : cursor + width]
-        cursor += width
-    return parts
-
-
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict) -> None:
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -382,12 +496,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent.init_rnn()
 
     prev_actions: torch.Tensor | None = None
+    prev_joint_vel: torch.Tensor | None = None
     consecutive_settle = torch.zeros(env.unwrapped.num_envs, device=env.unwrapped.device, dtype=torch.int32)
+    left_tcp_cfg = SceneEntityCfg("robot", body_names=LEFT_TCP_POSITION_LINKS)
+    right_tcp_cfg = SceneEntityCfg("robot", body_names=RIGHT_TCP_POSITION_LINKS)
+    left_joint_cfg = SceneEntityCfg("robot", joint_names=LEFT_ARM_JOINTS)
+    right_joint_cfg = SceneEntityCfg("robot", joint_names=RIGHT_ARM_JOINTS)
 
     left_error_samples = []
     right_error_samples = []
+    left_tcp_speed_samples = []
+    right_tcp_speed_samples = []
     action_rate_samples = []
     max_action_samples = []
+    joint_vel_max_abs_samples = []
+    joint_accel_max_abs_samples = []
     settle_ratio_samples = []
     settle_streak_samples = []
     near_goal_ratio_samples = []
@@ -396,32 +519,73 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         start_time = time.time()
         with torch.inference_mode():
             obs_torch = agent.obs_to_torch(obs)
-            actions = agent.get_action(obs_torch, is_deterministic=True)
+            actions = agent.get_action(obs_torch, is_deterministic=not args_cli.stochastic)
             obs, _, dones, _ = env.step(actions)
             if isinstance(obs, dict):
                 obs = obs["obs"]
 
-        policy_obs = obs if isinstance(obs, torch.Tensor) else torch.as_tensor(obs, device=env.unwrapped.device)
-        parts = _split_policy_obs(policy_obs)
-        left_error = torch.norm(parts["left_tcp_error"], dim=1)
-        right_error = torch.norm(parts["right_tcp_error"], dim=1)
+        left_error = torch.norm(
+            mdp.fingertip_midpoint_position_command_error_vector_b(
+                env.unwrapped, command_name="left_ee_pose", asset_cfg=left_tcp_cfg
+            ),
+            dim=1,
+        )
+        right_error = torch.norm(
+            mdp.fingertip_midpoint_position_command_error_vector_b(
+                env.unwrapped, command_name="right_ee_pose", asset_cfg=right_tcp_cfg
+            ),
+            dim=1,
+        )
+        left_tcp_speed = torch.norm(mdp.fingertip_midpoint_linear_velocity_b(env.unwrapped, asset_cfg=left_tcp_cfg), dim=1)
+        right_tcp_speed = torch.norm(
+            mdp.fingertip_midpoint_linear_velocity_b(env.unwrapped, asset_cfg=right_tcp_cfg), dim=1
+        )
+        joint_vel = torch.cat(
+            (
+                mdp.joint_vel_rel(env.unwrapped, asset_cfg=left_joint_cfg),
+                mdp.joint_vel_rel(env.unwrapped, asset_cfg=right_joint_cfg),
+            ),
+            dim=1,
+        )
+        joint_vel_max_abs = torch.max(torch.abs(joint_vel), dim=1).values
 
-        executed_actions = torch.cat((parts["left_actions"], parts["right_actions"]), dim=1)
+        executed_actions = torch.cat(
+            (
+                env.unwrapped.action_manager.get_term("left_arm_action").raw_actions,
+                env.unwrapped.action_manager.get_term("right_arm_action").raw_actions,
+            ),
+            dim=1,
+        )
         if prev_actions is None:
             action_rate = torch.zeros(executed_actions.shape[0], device=executed_actions.device)
         else:
             action_rate = torch.norm(executed_actions - prev_actions, dim=1)
         prev_actions = executed_actions.clone()
+        if prev_joint_vel is None:
+            joint_accel_max_abs = torch.zeros(joint_vel.shape[0], device=joint_vel.device)
+        else:
+            joint_accel_max_abs = torch.max(torch.abs((joint_vel - prev_joint_vel) / dt), dim=1).values
+        prev_joint_vel = joint_vel.clone()
 
         max_action = torch.max(torch.abs(executed_actions), dim=1).values
         is_near_goal = (left_error <= 0.04) & (right_error <= 0.04)
-        is_settled = is_near_goal & (action_rate <= 0.03)
+        is_settled = (
+            is_near_goal
+            & (left_tcp_speed <= 0.03)
+            & (right_tcp_speed <= 0.03)
+            & (joint_vel_max_abs <= 0.20)
+            & (action_rate <= 0.03)
+        )
         consecutive_settle = torch.where(is_settled, consecutive_settle + 1, torch.zeros_like(consecutive_settle))
 
         left_error_samples.append(left_error.mean().item())
         right_error_samples.append(right_error.mean().item())
+        left_tcp_speed_samples.append(left_tcp_speed.mean().item())
+        right_tcp_speed_samples.append(right_tcp_speed.mean().item())
         action_rate_samples.append(action_rate.mean().item())
         max_action_samples.append(max_action.mean().item())
+        joint_vel_max_abs_samples.append(joint_vel_max_abs.mean().item())
+        joint_accel_max_abs_samples.append(joint_accel_max_abs.mean().item())
         near_goal_ratio_samples.append(is_near_goal.float().mean().item())
         settle_ratio_samples.append(is_settled.float().mean().item())
         settle_streak_samples.append((consecutive_settle >= 15).float().mean().item())
@@ -440,22 +604,35 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     left_error_mean, left_error_tail = summarize(left_error_samples)
     right_error_mean, right_error_tail = summarize(right_error_samples)
+    left_tcp_speed_mean, left_tcp_speed_tail = summarize(left_tcp_speed_samples)
+    right_tcp_speed_mean, right_tcp_speed_tail = summarize(right_tcp_speed_samples)
     action_rate_mean, action_rate_tail = summarize(action_rate_samples)
     max_action_mean, max_action_tail = summarize(max_action_samples)
+    joint_vel_max_abs_mean, joint_vel_max_abs_tail = summarize(joint_vel_max_abs_samples)
+    joint_accel_max_abs_mean, joint_accel_max_abs_tail = summarize(joint_accel_max_abs_samples)
     near_goal_mean, near_goal_tail = summarize(near_goal_ratio_samples)
     settle_mean, settle_tail = summarize(settle_ratio_samples)
     settle_streak_mean, settle_streak_tail = summarize(settle_streak_samples)
 
     print(f"checkpoint: {resume_path}")
     print(f"steps: {args_cli.steps}")
+    print(f"stochastic: {args_cli.stochastic}")
     print(f"left_error_mean: {left_error_mean:.6f}")
     print(f"left_error_last50: {left_error_tail:.6f}")
     print(f"right_error_mean: {right_error_mean:.6f}")
     print(f"right_error_last50: {right_error_tail:.6f}")
+    print(f"left_tcp_speed_mean: {left_tcp_speed_mean:.6f}")
+    print(f"left_tcp_speed_last50: {left_tcp_speed_tail:.6f}")
+    print(f"right_tcp_speed_mean: {right_tcp_speed_mean:.6f}")
+    print(f"right_tcp_speed_last50: {right_tcp_speed_tail:.6f}")
     print(f"action_rate_mean: {action_rate_mean:.6f}")
     print(f"action_rate_last50: {action_rate_tail:.6f}")
     print(f"max_action_mean: {max_action_mean:.6f}")
     print(f"max_action_last50: {max_action_tail:.6f}")
+    print(f"joint_vel_max_abs_mean: {joint_vel_max_abs_mean:.6f}")
+    print(f"joint_vel_max_abs_last50: {joint_vel_max_abs_tail:.6f}")
+    print(f"joint_accel_max_abs_mean: {joint_accel_max_abs_mean:.6f}")
+    print(f"joint_accel_max_abs_last50: {joint_accel_max_abs_tail:.6f}")
     print(f"near_goal_ratio_mean: {near_goal_mean:.6f}")
     print(f"near_goal_ratio_last50: {near_goal_tail:.6f}")
     print(f"settle_ratio_mean: {settle_mean:.6f}")

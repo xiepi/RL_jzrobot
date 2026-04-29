@@ -12,7 +12,14 @@ from isaaclab.assets import Articulation
 from isaaclab.envs.mdp.commands.commands_cfg import UniformPoseCommandCfg
 from isaaclab.envs.mdp.commands.pose_command import UniformPoseCommand
 from isaaclab.utils import configclass
-from isaaclab.utils.math import combine_frame_transforms, compute_pose_error, quat_from_euler_xyz, quat_mul, quat_unique
+from isaaclab.utils.math import (
+    combine_frame_transforms,
+    compute_pose_error,
+    quat_from_euler_xyz,
+    quat_mul,
+    quat_unique,
+    subtract_frame_transforms,
+)
 
 from ..workspace_data import ensure_workspace_dataset
 
@@ -51,6 +58,17 @@ class ReachableWorkspacePoseCommand(UniformPoseCommand):
             quat_offset = torch.tensor(cfg.current_quaternion_offset, device=self.device, dtype=torch.float32).view(1, 4)
             self._current_quaternion_offset = quat_offset.expand(self.num_envs, -1)
 
+        self._curriculum_positions_b = self._positions_b
+        self.metrics["curriculum_pool_fraction"] = torch.ones(self.num_envs, device=self.device)
+        if any(fraction < 0.999 for fraction in cfg.curriculum_stage_fractions):
+            base_pos_w, base_quat_w = self._base_link_pose_w()
+            curr_pos_w, _ = self._current_pose_w()
+            curr_pos_b, _ = subtract_frame_transforms(base_pos_w, base_quat_w, curr_pos_w)
+            reference_pos_b = curr_pos_b[0]
+            distances = torch.norm(self._positions_b - reference_pos_b, dim=1)
+            sorted_ids = torch.argsort(distances)
+            self._curriculum_positions_b = self._positions_b[sorted_ids]
+
     def _base_link_pose_w(self) -> tuple[torch.Tensor, torch.Tensor]:
         return self.robot.data.body_pos_w[:, self._base_link_idx], self.robot.data.body_quat_w[:, self._base_link_idx]
 
@@ -83,12 +101,32 @@ class ReachableWorkspacePoseCommand(UniformPoseCommand):
         self.metrics["position_error"] = torch.norm(pos_error, dim=-1)
         self.metrics["orientation_error"] = torch.norm(rot_error, dim=-1)
 
+    def _curriculum_pool_size(self) -> tuple[int, float]:
+        total_positions = int(self._curriculum_positions_b.shape[0])
+        stage_steps = tuple(int(step) for step in self.cfg.curriculum_stage_steps)
+        stage_fractions = tuple(
+            max(0.05, min(1.0, float(fraction))) for fraction in self.cfg.curriculum_stage_fractions
+        )
+        common_step_counter = int(getattr(self._env, "common_step_counter", 0))
+
+        if common_step_counter < stage_steps[0]:
+            active_fraction = stage_fractions[0]
+        elif common_step_counter < stage_steps[1]:
+            active_fraction = stage_fractions[1]
+        else:
+            active_fraction = stage_fractions[2]
+
+        pool_size = max(1, min(total_positions, int(round(total_positions * active_fraction))))
+        return pool_size, active_fraction
+
     def _resample_command(self, env_ids: Sequence[int]):
         if len(env_ids) == 0:
             return
 
-        sample_ids = torch.randint(0, self._positions_b.shape[0], (len(env_ids),), device=self.device)
-        self.pose_command_b[env_ids, :3] = self._positions_b[sample_ids]
+        pool_size, active_fraction = self._curriculum_pool_size()
+        sample_ids = torch.randint(0, pool_size, (len(env_ids),), device=self.device)
+        self.pose_command_b[env_ids, :3] = self._curriculum_positions_b[sample_ids]
+        self.metrics["curriculum_pool_fraction"][env_ids] = active_fraction
 
         if self._fixed_quaternion is not None:
             self.pose_command_b[env_ids, 3:] = self._fixed_quaternion.expand(len(env_ids), -1)
@@ -131,6 +169,12 @@ class ReachableWorkspacePoseCommandCfg(UniformPoseCommandCfg):
 
     current_quaternion_offset: tuple[float, float, float, float] | None = None
     """Optional quaternion offset composed onto ``body_name`` for the current TCP orientation."""
+
+    curriculum_stage_fractions: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    """Fractions of the dataset exposed during the three curriculum stages."""
+
+    curriculum_stage_steps: tuple[int, int] = (0, 0)
+    """Step boundaries for transitioning from stage 1 to 2 and from stage 2 to 3."""
 
     @configclass
     class Ranges:

@@ -16,6 +16,7 @@ from .urdf_utils import SOURCE_URDF_PATH, get_resolved_urdf_path
 USD_DIR = JZ_MANIPULATION_ROOT_DIR / "usds" / "jz_bimanual"
 USD_PATH = USD_DIR / "jz_bimanual.usd"
 USD_BASE_PATH = USD_DIR / "configuration" / "jz_bimanual_base.usd"
+FORCE_USD_REBUILD = False
 
 
 def _is_fresh_cache(cache_paths: tuple[Path, ...], dependency_paths: tuple[Path, ...]) -> bool:
@@ -43,7 +44,7 @@ def _make_spawn_cfg():
 
     resolved_urdf_path = get_resolved_urdf_path()
 
-    if _is_fresh_cache((USD_PATH, USD_BASE_PATH), (SOURCE_URDF_PATH, resolved_urdf_path)):
+    if not FORCE_USD_REBUILD and _is_fresh_cache((USD_PATH, USD_BASE_PATH), (SOURCE_URDF_PATH, resolved_urdf_path)):
         return sim_utils.UsdFileCfg(
             usd_path=str(USD_PATH),
             rigid_props=rigid_props,
@@ -57,10 +58,10 @@ def _make_spawn_cfg():
         fix_base=True,
         merge_fixed_joints=False,
         make_instanceable=True,
-        force_usd_conversion=False,
+        force_usd_conversion=True,
         collision_from_visuals=False,
         self_collision=False,
-        collider_type="convex_hull",
+        collider_type="convex_decomposition",
         rigid_props=rigid_props,
         articulation_props=articulation_props,
         joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
@@ -84,6 +85,27 @@ _INITIAL_JOINT_POS.update(
 _INITIAL_JOINT_POS.update(LEFT_GRIPPER_OPEN)
 _INITIAL_JOINT_POS.update(RIGHT_GRIPPER_OPEN)
 
+NEUTRAL_GRASP_JOINT_POS = {
+    "body_joint1": 0.11,
+    "body_joint2": 0.15,
+    "body_joint5": 0.21,
+    "left_arm_joint1": -0.65,
+    "left_arm_joint2": -1.16,
+    "left_arm_joint3": 0.45,
+    "left_arm_joint4": -0.90,
+    "left_arm_joint5": 1.01,
+    "left_arm_joint6": -0.05,
+    "left_arm_joint7": 0.01,
+    **LEFT_GRIPPER_OPEN,
+    "right_arm_joint1": 0.65,
+    "right_arm_joint2": 1.16,
+    "right_arm_joint3": -0.45,
+    "right_arm_joint4": 0.90,
+    "right_arm_joint5": -1.01,
+    "right_arm_joint6": 0.05,
+    "right_arm_joint7": 0.01,
+    **RIGHT_GRIPPER_OPEN,
+}
 
 JZ_BIMANUAL_CFG = ArticulationCfg(
     spawn=_make_spawn_cfg(),

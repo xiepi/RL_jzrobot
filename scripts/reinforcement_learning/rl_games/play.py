@@ -87,8 +87,10 @@ import jzlab.tasks  # noqa: F401
 from jzlab.tasks.manager_based.jz_manipulation.bimanual.reach import mdp
 from jzlab.tasks.manager_based.jz_manipulation.constants import (
     LEFT_ARM_JOINTS,
+    LEFT_TCP_ORIENTATION_LINK,
     LEFT_TCP_POSITION_LINKS,
     RIGHT_ARM_JOINTS,
+    RIGHT_TCP_ORIENTATION_LINK,
     RIGHT_TCP_POSITION_LINKS,
 )
 from isaaclab_tasks.utils import get_checkpoint_path
@@ -219,12 +221,24 @@ def _apply_obs_compat_for_checkpoint(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnv
     if policy_cfg is None:
         return False
 
-    if obs_dim == 56:
-        changed = False
+    changed = False
+    if obs_dim in (56, 62, 68):
         for term_name in ("left_pose_command", "right_pose_command"):
             if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
-                getattr(policy_cfg, term_name).func = jzlab.tasks.manager_based.jz_manipulation.bimanual.reach.mdp.generated_commands
-        for term_name in ("left_tcp_error", "right_tcp_error"):
+                getattr(policy_cfg, term_name).func = mdp.generated_commands
+                changed = True
+
+    if obs_dim == 56:
+        for term_name in (
+            "left_tcp_error",
+            "right_tcp_error",
+            "left_tcp_pos",
+            "right_tcp_pos",
+            "left_tcp_lin_vel",
+            "right_tcp_lin_vel",
+            "left_wrist_gravity",
+            "right_wrist_gravity",
+        ):
             if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
                 setattr(policy_cfg, term_name, None)
                 changed = True
@@ -240,37 +254,58 @@ def _apply_obs_compat_for_checkpoint(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnv
             arm_actuator = robot_cfg.actuators.get("arm")
             if arm_actuator is not None:
                 arm_actuator.damping = 80.0
-        if changed:
-            print("[INFO] Applying legacy 56-dim checkpoint compatibility for playback.")
-        return changed
 
     if obs_dim == 62:
-        changed = False
+        for term_name in (
+            "left_tcp_pos",
+            "right_tcp_pos",
+            "left_tcp_lin_vel",
+            "right_tcp_lin_vel",
+            "left_wrist_gravity",
+            "right_wrist_gravity",
+        ):
+            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
+                setattr(policy_cfg, term_name, None)
+                changed = True
+
+    if obs_dim == 66:
         for term_name in ("left_pose_command", "right_pose_command"):
             if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
-                getattr(policy_cfg, term_name).func = jzlab.tasks.manager_based.jz_manipulation.bimanual.reach.mdp.generated_commands
+                getattr(policy_cfg, term_name).func = mdp.generated_command_positions
                 changed = True
-        if changed:
-            print("[INFO] Applying legacy 62-dim checkpoint compatibility for playback.")
-        return changed
+        for term_name in ("left_tcp_pos", "right_tcp_pos"):
+            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
+                setattr(policy_cfg, term_name, None)
+                changed = True
+        if getattr(policy_cfg, "left_tcp_lin_vel", None) is None:
+            policy_cfg.left_tcp_lin_vel = _make_tcp_lin_vel_obs_term(LEFT_TCP_POSITION_LINKS)
+            changed = True
+        if getattr(policy_cfg, "right_tcp_lin_vel", None) is None:
+            policy_cfg.right_tcp_lin_vel = _make_tcp_lin_vel_obs_term(RIGHT_TCP_POSITION_LINKS)
+            changed = True
+        if getattr(policy_cfg, "left_wrist_gravity", None) is None:
+            policy_cfg.left_wrist_gravity = _make_projected_gravity_obs_term(LEFT_TCP_ORIENTATION_LINK)
+            changed = True
+        if getattr(policy_cfg, "right_wrist_gravity", None) is None:
+            policy_cfg.right_wrist_gravity = _make_projected_gravity_obs_term(RIGHT_TCP_ORIENTATION_LINK)
+            changed = True
 
     if obs_dim == 68:
-        changed = False
-        for term_name in ("left_pose_command", "right_pose_command"):
-            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
-                getattr(policy_cfg, term_name).func = jzlab.tasks.manager_based.jz_manipulation.bimanual.reach.mdp.generated_commands
-                changed = True
         if getattr(policy_cfg, "left_tcp_pos", None) is None:
             policy_cfg.left_tcp_pos = _make_tcp_position_obs_term(LEFT_TCP_POSITION_LINKS)
             changed = True
         if getattr(policy_cfg, "right_tcp_pos", None) is None:
             policy_cfg.right_tcp_pos = _make_tcp_position_obs_term(RIGHT_TCP_POSITION_LINKS)
             changed = True
-        if changed:
-            print("[INFO] Applying legacy 68-dim checkpoint compatibility for playback.")
-        return changed
+        for term_name in ("left_tcp_lin_vel", "right_tcp_lin_vel", "left_wrist_gravity", "right_wrist_gravity"):
+            if hasattr(policy_cfg, term_name) and getattr(policy_cfg, term_name) is not None:
+                setattr(policy_cfg, term_name, None)
+                changed = True
 
-    return False
+    if changed:
+        print(f"[INFO] Applying legacy {obs_dim}-dim checkpoint compatibility for playback.")
+
+    return changed
 
 
 _OBS_GROUP_CFG_KEYS = (
@@ -286,6 +321,20 @@ def _make_tcp_position_obs_term(body_names: list[str]) -> ObsTerm:
     return ObsTerm(func=mdp.fingertip_midpoint_position_b, params={"asset_cfg": SceneEntityCfg("robot", body_names=body_names)})
 
 
+def _make_tcp_lin_vel_obs_term(body_names: list[str]) -> ObsTerm:
+    return ObsTerm(
+        func=mdp.fingertip_midpoint_linear_velocity_b,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=body_names)},
+    )
+
+
+def _make_projected_gravity_obs_term(body_name: str) -> ObsTerm:
+    return ObsTerm(
+        func=mdp.body_projected_gravity_b,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=[body_name])},
+    )
+
+
 def _make_tcp_error_obs_term(command_name: str, body_names: list[str]) -> ObsTerm:
     return ObsTerm(
         func=mdp.fingertip_midpoint_position_command_error_vector_b,
@@ -293,13 +342,41 @@ def _make_tcp_error_obs_term(command_name: str, body_names: list[str]) -> ObsTer
     )
 
 
-def _build_policy_term(term_name: str, saved_term_cfg: dict, current_terms: dict[str, ObsTerm]) -> ObsTerm | None:
+_POLICY_TERM_NAMES = (
+    "left_joint_pos",
+    "right_joint_pos",
+    "left_joint_vel",
+    "right_joint_vel",
+    "left_tcp_pos",
+    "right_tcp_pos",
+    "left_pose_command",
+    "right_pose_command",
+    "left_tcp_error",
+    "right_tcp_error",
+    "left_tcp_lin_vel",
+    "right_tcp_lin_vel",
+    "left_wrist_gravity",
+    "right_wrist_gravity",
+    "left_actions",
+    "right_actions",
+)
+
+
+def _build_policy_term(term_name: str, saved_term_cfg: dict, current_terms: dict[str, ObsTerm | None]) -> ObsTerm | None:
     term_cfg = current_terms.get(term_name)
 
     if term_name == "left_tcp_pos":
         return _make_tcp_position_obs_term(LEFT_TCP_POSITION_LINKS)
     if term_name == "right_tcp_pos":
         return _make_tcp_position_obs_term(RIGHT_TCP_POSITION_LINKS)
+    if term_name == "left_tcp_lin_vel":
+        return _make_tcp_lin_vel_obs_term(LEFT_TCP_POSITION_LINKS)
+    if term_name == "right_tcp_lin_vel":
+        return _make_tcp_lin_vel_obs_term(RIGHT_TCP_POSITION_LINKS)
+    if term_name == "left_wrist_gravity":
+        return _make_projected_gravity_obs_term(LEFT_TCP_ORIENTATION_LINK)
+    if term_name == "right_wrist_gravity":
+        return _make_projected_gravity_obs_term(RIGHT_TCP_ORIENTATION_LINK)
     if term_name == "left_tcp_error" and term_cfg is None:
         return _make_tcp_error_obs_term("left_ee_pose", LEFT_TCP_POSITION_LINKS)
     if term_name == "right_tcp_error" and term_cfg is None:
@@ -391,33 +468,22 @@ def _apply_saved_env_compat_for_checkpoint(
     changed = False
 
     policy_cfg = getattr(getattr(env_cfg, "observations", None), "policy", None)
-    saved_policy_cfg = saved_env_cfg.get("observations", {}).get("policy", {})
+    saved_policy_cfg = (saved_env_cfg.get("observations") or {}).get("policy") or {}
     if policy_cfg is not None and saved_policy_cfg:
-        config_items = {
-            key: policy_cfg.__dict__[key]
-            for key in _OBS_GROUP_CFG_KEYS
-            if key in policy_cfg.__dict__
-        }
-        config_items["enable_corruption"] = False
-        current_terms = {
-            key: value
-            for key, value in policy_cfg.__dict__.items()
-            if key not in _OBS_GROUP_CFG_KEYS and value is not None
-        }
-        ordered_terms: dict[str, ObsTerm] = {}
+        current_terms = {term_name: getattr(policy_cfg, term_name, None) for term_name in _POLICY_TERM_NAMES}
+        for term_name in _POLICY_TERM_NAMES:
+            if hasattr(policy_cfg, term_name) or current_terms.get(term_name) is not None:
+                setattr(policy_cfg, term_name, None)
         for term_name, saved_term_cfg in saved_policy_cfg.items():
-            if term_name in _OBS_GROUP_CFG_KEYS or saved_term_cfg is None:
+            if term_name not in _POLICY_TERM_NAMES or saved_term_cfg is None:
                 continue
             term_cfg = _build_policy_term(term_name, saved_term_cfg, current_terms)
             if term_cfg is not None:
-                ordered_terms[term_name] = term_cfg
-        if ordered_terms:
-            policy_cfg.__dict__.clear()
-            policy_cfg.__dict__.update(config_items)
-            policy_cfg.__dict__.update(ordered_terms)
-            changed = True
+                setattr(policy_cfg, term_name, term_cfg)
+                changed = True
+        policy_cfg.enable_corruption = False
 
-    commands_cfg = saved_env_cfg.get("commands", {})
+    commands_cfg = saved_env_cfg.get("commands") or {}
     for command_name in ("left_ee_pose", "right_ee_pose"):
         saved_command_cfg = commands_cfg.get(command_name, {})
         live_command_cfg = getattr(getattr(env_cfg, "commands", None), command_name, None)
@@ -440,15 +506,15 @@ def _apply_saved_env_compat_for_checkpoint(
                 setattr(live_command_cfg, attr_name, saved_value)
                 changed = True
 
-    sim_cfg = saved_env_cfg.get("sim", {})
-    saved_physx_cfg = sim_cfg.get("physx", {})
+    sim_cfg = saved_env_cfg.get("sim") or {}
+    saved_physx_cfg = sim_cfg.get("physx") or {}
     if hasattr(env_cfg, "sim") and hasattr(env_cfg.sim, "physx"):
         ext_forces = saved_physx_cfg.get("enable_external_forces_every_iteration")
         if ext_forces is not None:
             env_cfg.sim.physx.enable_external_forces_every_iteration = ext_forces
             changed = True
 
-    robot_cfg = saved_env_cfg.get("scene", {}).get("robot", {})
+    robot_cfg = ((saved_env_cfg.get("scene") or {}).get("robot")) or {}
     live_robot_cfg = getattr(getattr(env_cfg, "scene", None), "robot", None)
     if live_robot_cfg is not None:
         solver_vel_iters = robot_cfg.get("spawn", {}).get("articulation_props", {}).get("solver_velocity_iteration_count")
@@ -469,7 +535,7 @@ def _apply_saved_env_compat_for_checkpoint(
                     arm_actuator.stiffness = arm_stiffness
                     changed = True
 
-    saved_actions_cfg = saved_env_cfg.get("actions", {})
+    saved_actions_cfg = saved_env_cfg.get("actions") or {}
     left_action_cfg = _build_action_cfg(saved_actions_cfg.get("left_arm_action", {}), LEFT_ARM_JOINTS)
     right_action_cfg = _build_action_cfg(saved_actions_cfg.get("right_arm_action", {}), RIGHT_ARM_JOINTS)
     if left_action_cfg is not None:

@@ -34,5 +34,20 @@ def _quat_from_rpy(roll: float, pitch: float, yaw: float) -> tuple[float, float,
 
 GRIPPER_MOUNT_QUAT = _quat_from_rpy(-2.9951, -1.5708, -0.15964)
 
-LEFT_GRIPPER_OPEN = {"left_gripper_narrow_joint": -1.0, "left_gripper_wide_joint": 1.0}
-RIGHT_GRIPPER_OPEN = {"right_gripper_narrow_joint": -1.0, "right_gripper_wide_joint": 1.0}
+_NARROW_JOINT_SAFE_CLOSED = -0.049
+_WIDE_JOINT_SAFE_CLOSED = -0.049
+
+# URDF limits: narrow [-1.2, -0.05], wide [-0.05, 1.2]
+# OPEN: narrow = -1.2, wide = 1.2
+# CLOSED: narrow = -0.05, wide = -0.05
+LEFT_GRIPPER_OPEN = {"left_gripper_narrow_joint": -1.2, "left_gripper_wide_joint": 1.2}
+RIGHT_GRIPPER_OPEN = {"right_gripper_narrow_joint": -1.2, "right_gripper_wide_joint": 1.2}
+
+LEFT_GRIPPER_CLOSED = {
+    "left_gripper_narrow_joint": _NARROW_JOINT_SAFE_CLOSED,
+    "left_gripper_wide_joint": _WIDE_JOINT_SAFE_CLOSED,
+}
+RIGHT_GRIPPER_CLOSED = {
+    "right_gripper_narrow_joint": _NARROW_JOINT_SAFE_CLOSED,
+    "right_gripper_wide_joint": _WIDE_JOINT_SAFE_CLOSED,
+}

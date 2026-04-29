@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from tensorboard.backend.event_processing import event_accumulator
 
 
-DEFAULT_LOG_ROOT = Path(r"E:\isaac-lab\IsaacLab\logs\rl_games\jz_bi_reach")
+def _resolve_default_log_root() -> Path:
+    isaaclab_path = os.environ.get("ISAACLAB_PATH")
+    if isaaclab_path:
+        return Path(isaaclab_path).expanduser().resolve() / "logs" / "rl_games" / "jz_bi_reach"
+    return Path.cwd() / "logs" / "rl_games" / "jz_bi_reach"
+
+
+DEFAULT_LOG_ROOT = _resolve_default_log_root()
 DEFAULT_TAGS = (
     "rewards/iter",
     "shaped_rewards/iter",
