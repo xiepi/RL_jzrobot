@@ -10,8 +10,15 @@
 
 当前任务：
 
-- `Isaac-Reach-JZ-Bi-v0`
-- `Isaac-Reach-JZ-Bi-Play-v0`
+- Reach：
+  - `Isaac-Reach-JZ-Bi-v0`
+  - `Isaac-Reach-JZ-Bi-Play-v0`
+- Grasp：
+  - `Isaac-Grasp-JZ-Bi-v0`
+  - `Isaac-Grasp-JZ-Bi-Play-v0`
+- Open Drawer：
+  - `Isaac-Open-Drawer-JZ-Bi-v0`
+  - `Isaac-Open-Drawer-JZ-Bi-Play-v0`
 
 ## 项目结构（仓库内）
 
@@ -138,7 +145,11 @@ python -m pip install -e .\source\jzlab
 & "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\tools\list_envs.py"
 ```
 
-看到 `Isaac-Reach-JZ-Bi-v0` / `Isaac-Reach-JZ-Bi-Play-v0` 即通过。
+看到以下任务即通过：
+
+- `Isaac-Reach-JZ-Bi-v0` / `Isaac-Reach-JZ-Bi-Play-v0`
+- `Isaac-Grasp-JZ-Bi-v0` / `Isaac-Grasp-JZ-Bi-Play-v0`
+- `Isaac-Open-Drawer-JZ-Bi-v0` / `Isaac-Open-Drawer-JZ-Bi-Play-v0`
 
 ### 5) 生成 USD（首次建议执行）
 
@@ -172,12 +183,47 @@ Get-ChildItem "$env:ISAACLAB_PATH\logs\rl_games\jz_bi_reach\<run_name>\nn\*.pth"
 & "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\reinforcement_learning\rl_games\play.py" --task Isaac-Reach-JZ-Bi-Play-v0 --num_envs 1 --checkpoint "$env:ISAACLAB_PATH\logs\rl_games\jz_bi_reach\<run_name>\nn\jz_bi_reach.pth"
 ```
 
+### 8) 其他双臂任务命令（Grasp / Open Drawer）
+
+Grasp 训练（示例）：
+
+```powershell
+& "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\reinforcement_learning\rl_games\train.py" --task Isaac-Grasp-JZ-Bi-v0 --num_envs 64 --max_iterations 120 --headless
+```
+
+Grasp 回放（示例）：
+
+```powershell
+& "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\reinforcement_learning\rl_games\play.py" --task Isaac-Grasp-JZ-Bi-Play-v0 --num_envs 1 --checkpoint "$env:ISAACLAB_PATH\logs\rl_games\jz_bi_grasp\<run_name>\nn\jz_bi_grasp.pth"
+```
+
+Open Drawer 训练（示例）：
+
+```powershell
+& "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\reinforcement_learning\rl_games\train.py" --task Isaac-Open-Drawer-JZ-Bi-v0 --num_envs 64 --max_iterations 120 --headless
+```
+
+Open Drawer 回放（示例）：
+
+```powershell
+& "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\reinforcement_learning\rl_games\play.py" --task Isaac-Open-Drawer-JZ-Bi-Play-v0 --num_envs 1 --checkpoint "$env:ISAACLAB_PATH\logs\rl_games\jz_bi_open_drawer\<run_name>\nn\jz_bi_open_drawer.pth"
+```
+
+如果不确定 checkpoint 文件名，可先找最新 `.pth`：
+
+```powershell
+$ckpt = Get-ChildItem "$env:ISAACLAB_PATH\logs\rl_games\<task_log_dir>\<run_name>\nn\*.pth" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$ckpt.FullName
+```
+
 ## 一键训练（含自动监控）
 
 ```powershell
 cd $env:JZLAB_PROJECT_PATH
 powershell -ExecutionPolicy Bypass -File ".\scripts\reinforcement_learning\rl_games\launch_training_windows.ps1" -NumEnvs 1024 -MaxIterations 2000 -StartTensorBoard
 ```
+
+说明：当前一键脚本的 watcher 主要按 Reach 任务配置（`Isaac-Reach-JZ-Bi-Play-v0`）运行。对于 Grasp / Open Drawer，建议先使用上面的“手动训练 + 手动回放”命令。
 
 可选参数：
 
@@ -196,7 +242,3 @@ powershell -ExecutionPolicy Bypass -File ".\scripts\reinforcement_learning\rl_ga
 - 找不到 `jz_descripetion`：检查 `JZLAB_WORKSPACE_ROOT` 是否正确。
 - `ISAACLAB_PATH` 为空：先设置环境变量，或在启动脚本传 `-IsaacLabRoot`。
 - 首次训练慢：USD 转换与 shader 缓存会拉长首轮耗时。
-
-## 许可证
-
-MIT，详见 `LICENSE`。
