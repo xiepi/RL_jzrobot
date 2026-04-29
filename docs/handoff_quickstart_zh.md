@@ -5,7 +5,7 @@
 1. 环境配置
 2. 任务注册校验
 3. 训练冒烟
-4. checkpoint 回放
+4. 模型回放（checkpoint）
 5. 训练监控与问题定位
 
 ## 1. 交接前提
@@ -62,21 +62,60 @@ python -m pip install -e .\source\jzlab
 & "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\tools\convert_jz_bimanual.py" --headless
 ```
 
-### C. 训练冒烟验收（建议 5 轮）
+### C. 训练冒烟验收（仅验证链路，建议 5 轮）
 
 ```powershell
 & "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\reinforcement_learning\rl_games\train.py" --task Isaac-Reach-JZ-Bi-v0 --num_envs 32 --max_iterations 5 --headless
 ```
 
-### D. 回放验收
+说明：该步骤主要验证“能否正常开训”，不保证产出 checkpoint。
+
+### D. 产出 checkpoint 验收（用于回放）
+
+由于默认配置是每 `100` 轮保存一次模型，建议至少跑到 `120` 轮：
+
+```powershell
+& "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\reinforcement_learning\rl_games\train.py" --task Isaac-Reach-JZ-Bi-v0 --num_envs 64 --max_iterations 120 --headless
+```
+
+检查模型是否生成：
+
+```powershell
+Get-ChildItem "$env:ISAACLAB_PATH\logs\rl_games\jz_bi_reach\<run_name>\nn\*.pth"
+```
+
+若希望更快看到模型文件，可临时覆盖保存频率：
+
+```powershell
+& "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\reinforcement_learning\rl_games\train.py" --task Isaac-Reach-JZ-Bi-v0 --num_envs 64 --max_iterations 20 --headless +agent.params.config.save_frequency=5 +agent.params.config.save_best_after=1
+```
+
+### E. 回放验收
 
 ```powershell
 & "$env:ISAACLAB_PATH\isaaclab.bat" -p "$env:JZLAB_PROJECT_PATH\scripts\reinforcement_learning\rl_games\play.py" --task Isaac-Reach-JZ-Bi-Play-v0 --num_envs 1 --checkpoint "$env:ISAACLAB_PATH\logs\rl_games\jz_bi_reach\<run_name>\nn\jz_bi_reach.pth"
 ```
 
+### F. 已实测命令（2026-04-29）
+
+以下命令在你的机器上已成功启动训练并稳定推进到 epoch 9：
+
+```powershell
+cd E:\isaac-lab\IsaacLab
+conda activate env_isaacsim
+.\isaaclab.bat -p "E:\jz_robot\jz_isaac_lab\scripts\reinforcement_learning\rl_games\train.py" --task Isaac-Reach-JZ-Bi-v0 --headless --num_envs 64 --max_iterations 6000
+```
+
+实测关键信息（可作为交接佐证）：
+
+- 任务配置与场景创建成功，`Observation shape = (68,)`，`Action shape = 14`。
+- 训练正常推进，`fps step` 约 `3.7k ~ 3.9k`。
+- 该次运行的实验名为 `2026-04-29_22-39-06`。
+- 由于在 `epoch 9` 手动 `Ctrl+C` 停止，且默认保存频率为 100 轮，因此 `nn` 目录可能为空。
+
 ## 4. 推荐交接方式（省心）
 
-优先用一键脚本启动训练与 watcher：
+优先用一键脚本启动训练与监控脚本：
 
 ```powershell
 cd $env:JZLAB_PROJECT_PATH
@@ -95,7 +134,7 @@ powershell -ExecutionPolicy Bypass -File ".\scripts\reinforcement_learning\rl_ga
 - 训练目录：`$env:ISAACLAB_PATH\logs\rl_games\jz_bi_reach\<run_name>`
 - 模型目录：`...\<run_name>\nn\`
 - 配置快照：`...\<run_name>\params\env.yaml` 与 `agent.yaml`
-- watcher 日志：`...\<run_name>\watch_status.log` 与 `watch_eval.log`
+- 监控日志：`...\<run_name>\watch_status.log` 与 `watch_eval.log`
 
 ## 6. 常见问题排查
 
@@ -133,5 +172,5 @@ powershell -ExecutionPolicy Bypass -File ".\scripts\reinforcement_learning\rl_ga
 
 1. 能在新机器列出 JZ 任务。
 2. 能完成 5 轮训练冒烟且生成日志。
-3. 能回放冒烟产出的 checkpoint。
+3. 能回放一次“已产出 checkpoint”的训练结果。
 4. 能说清楚日志目录、模型目录、配置快照目录。
